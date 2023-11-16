@@ -60,8 +60,9 @@ int main(void) {
 
     fill(255, 255, 255, 255);
     rect(100, 100, 200, 200);
-    image(hi, 200, 200, 200, 200);
+    image(hi, 200, 200, 100, 100);
     draw();
+    
     //glfwSetWindowShouldClose(window, 1);
     glfwSwapBuffers(window);
     glfwPollEvents();

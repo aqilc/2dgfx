@@ -6,7 +6,6 @@
 #include <vec.h>
 #include <hash.h>
 
-
 typedef union gfx_vector {
   struct {
     int x, y;
@@ -32,11 +31,11 @@ typedef enum gfx_texture_type {
 } gfx_texture_type;
 
 typedef struct gfx_texture {
-  uint8_t* tex;          // Pointer to texture's data buffer (RGBA)
+  uint8_t* tex;    // Pointer to texture's data buffer (RGBA)
   gfx_vector size;
   GLuint id;
   GLuint slot;
-  uint32_t uses;      // Uses per frame
+  uint32_t uses;   // Uses per frame
   gfx_texture_type type;
 } gfx_texture;
 
@@ -50,34 +49,22 @@ struct gfx_atlas_node {
 typedef struct typeface {
   char* name;
   uint32_t space_width;
-
-  // Texture atlas
-  gfx_texture* tex;
-
-  // Vec<gfx_atlas_node>
-  struct gfx_atlas_node* atlas_tree;
-
-  // FT_Face internally
-  void* face;
-
+  gfx_texture* tex;                  // Texture atlas
+  struct gfx_atlas_node* atlas_tree; // Vec<gfx_atlas_node>
+  void* face;                        // FT_Face internally
   ht(unsigned long, gfx_char) chars;
 } typeface;
 
 struct gfx_ctx {
+  float curcol[4];        // Current color
+  uint32_t slots;         // Array of length 32 of booleans for slots(OpenGL only supports 32).
+  gfx_texture* textures;  // Vec<gfx_texture>
   
   // OpenGL related variables.
   struct {
     GLuint progid, varrid, vbufid, idxbufid;
     ht(char*, GLint) uniforms;
   } gl;
-
-  float curcol[4];
-
-  // Vec<gfx_texture>
-  gfx_texture* textures;
-
-  // Array of length 32 of booleans for slots(OpenGL only supports 32).
-  uint32_t slots;
 
   struct {
     ht(char*, typeface) store;
@@ -97,14 +84,14 @@ struct gfx_ctx {
   struct {
     float data[4][4];
     bool changed;
-    bool shapesdrawn;
+    bool used;        // Calls draw if there were shapes drawn between transforms
   } transform;
 };
 
 typedef gfx_texture* img;
 
 // Initializes a 2DGFX Context and sets up OpenGL, heaps and buffers.
-struct gfx_ctx* gfx_init();
+struct gfx_ctx* gfx_init(uint32_t w, uint32_t h);
 
 // When using multiple 2DGFX contexts, switch contexts with this.
 void gfx_curctx(struct gfx_ctx* c);

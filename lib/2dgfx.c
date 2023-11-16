@@ -1,3 +1,14 @@
+/**
+ * TODO:
+ * 	- Text Rendering
+ * 		- tsiz()
+ * 		- setfont()
+ * 		- text()
+ * 	- Masking
+ * 		- Determine Structure for drawing.
+ * 		- https://community.khronos.org/t/texture-environment/39767/4
+ */
+
 #include "2dgfx.h"
 
 #include <stdint.h>
@@ -19,18 +30,18 @@
 	#define GFX_FONT_ATLAS_START_SIZE 512
 #endif
 
-#define u8 uint8_t
-#define u16 uint16_t
-#define u32 uint32_t
-#define u64 uint64_t
+typedef uint8_t u8;
+typedef uint16_t u16;
+typedef uint32_t u32;
+typedef uint64_t u64;
 
-#define i8 int8_t
-#define i16 int16_t
-#define i32 int32_t
-#define i64 int64_t
+typedef int8_t i8;
+typedef int16_t i16;
+typedef int32_t i32;
+typedef int64_t i64;
 
-#define f32 float
-#define f64 double
+typedef float f32;
+typedef double f64;
 
 #define GFX_DEBUG
 #ifdef GFX_DEBUG
@@ -101,7 +112,7 @@ vec4 text;
 void main() {
 	text = texture(u_tex, v_text);
 	// color = u_shape ? vec4(text.r * v_col.rgba) : vec4(mix(text.rgb, v_col.rgb, v_col.a), text.a);
-	color = u_shape ? vec4(1.0, 1.0, 1.0, 1.0) : text;
+	color = u_shape ? v_col : text;
 	// color = vec4(1.0, 1.0, 1.0, 1.0);
 })
 };
@@ -320,7 +331,7 @@ void glUSet2f(char* name, vec2 p) { glUniform2f(glULoc(name), p[0], p[1]); }
 FT_Library ft = NULL;
 
 
-void gfx_curctx(struct gfx_ctx* c) {
+void gfx_setctx(struct gfx_ctx* c) {
 	ctx = c;
 	glBindVertexArray(c->gl.varrid);
 	glUseProgram(c->gl.progid);
@@ -343,7 +354,7 @@ struct gfx_ctx* gfx_init(u32 w, u32 h) {
 	ctx->textures = vnew();
 
 	// Initializes OpenGL Context
-	gfx_curctx(ctx);
+	gfx_setctx(ctx);
 
 	// Initializes draw buffer vertexes
 	ctx->drawbuf.svec = vnew();
@@ -352,7 +363,7 @@ struct gfx_ctx* gfx_init(u32 w, u32 h) {
   // Creates a projection in proportion to the screen coordinates
   mat4x4 p;
   mat4x4_identity(p);
-  mat4x4_ortho(p, .0f, (float) w, (float) h, .0f, 1.0f, -1.f);
+  mat4x4_ortho(p, .0f, (f32) w, (f32) h, .0f, 1.0f, -1.f);
   glUSetm4("u_mvp", p);
   
 	return ctx;
@@ -375,7 +386,6 @@ void draw() {
 		});
 	}
 	
-	// printf("%f, %f, %f, %f | %d, %d\n", (float) ctx->drawbuf.svec[1].p.fx, (float) ctx->drawbuf.svec[1].p.fy, (float) ctx->drawbuf.svec[2].p.fx, (float) ctx->drawbuf.svec[2].p.fy, vlen(ctx->drawbuf.svec), vlen(ctx->drawbuf.idvec));
 	glBufferData(GL_ARRAY_BUFFER, vlen(ctx->drawbuf.svec) * sizeof(*ctx->drawbuf.svec), ctx->drawbuf.svec, GL_DYNAMIC_DRAW);
 	glBufferData(GL_ELEMENT_ARRAY_BUFFER, vlen(ctx->drawbuf.idvec) * sizeof(*ctx->drawbuf.idvec), ctx->drawbuf.idvec, GL_DYNAMIC_DRAW);
 	glDrawElements(GL_TRIANGLES, vlen(ctx->drawbuf.idvec), GL_UNSIGNED_INT, NULL);
@@ -440,7 +450,15 @@ img gfx_loadimg(char* file) {
 	return gfx_inittex(t, width, height, GL_TEX_IMAGE);
 }
 
-float image_tex_coords[] = { 0.f, 0.f, 1.f, 0.f, 1.f, 1.f, 0.f, 1.f };
+
+// Sets texture lookup coordinates
+static inline void gfx_tp(f32* texcoords) {
+	struct gfx_drawbuf* last4 = vlast(ctx->drawbuf.svec) - 3;
+	for(int i = 0; i < 4; i ++)
+		last4[i].tp = (gfx_vector) { .fx = texcoords[i * 2], .fy = texcoords[i * 2 + 1] };
+}
+
+
 void image(img img, int x, int y, int w, int h) {
 	if(vlen(ctx->drawbuf.svec)) glUSeti("u_shape", true), draw();
 	if(!img->id) gfx_texupload(img);
@@ -451,9 +469,7 @@ void image(img img, int x, int y, int w, int h) {
 	// Creates a rectangle the image will be held on, then uploads the texture coordinates to map to the image
 	fill(255, 255, 255, 255);
 	rect(x, y, w, h);
-	struct gfx_drawbuf* last4 = vlast(ctx->drawbuf.svec) - 3;
-	for(int i = 0; i < 4; i ++)
-		last4[i].tp = (gfx_vector) { .fx = image_tex_coords[i * 2], .fy = image_tex_coords[i * 2 + 1] };
+	gfx_tp((f32[]) { 0.f, 0.f, 1.f, 0.f, 1.f, 1.f, 0.f, 1.f });
 	
 	glUSeti("u_shape", false);
 	draw();
@@ -569,20 +585,19 @@ typeface* gfx_loadfont(char* file) {
 }
 
 void fill(u8 r, u8 g, u8 b, u8 a) {
-	ctx->curcol[0] = (float) r / 255.f;
-	ctx->curcol[1] = (float) g / 255.f;
-	ctx->curcol[2] = (float) b / 255.f;
-	ctx->curcol[3] = (float) a / 255.f;
+	ctx->curcol[0] = (f32) r / 255.f;
+	ctx->curcol[1] = (f32) g / 255.f;
+	ctx->curcol[2] = (f32) b / 255.f;
+	ctx->curcol[3] = (f32) a / 255.f;
 }
 
 void quad(int x1, int y1, int x2, int y2, int x3, int y3, int x4, int y4) {
   vpusharr(ctx->drawbuf.svec, {
-		{ .p = { .fx = (float) x1, .fy = (float) y1 }, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } },
-		{ .p = { .fx = (float) x2, .fy = (float) y2 }, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } },
-		{ .p = { .fx = (float) x3, .fy = (float) y3 }, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } },
-		{ .p = { .fx = (float) x4, .fy = (float) y4 }, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } }
+		{ .p = { .fx = (f32) x1, .fy = (f32) y1 }, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } },
+		{ .p = { .fx = (f32) x2, .fy = (f32) y2 }, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } },
+		{ .p = { .fx = (f32) x3, .fy = (f32) y3 }, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } },
+		{ .p = { .fx = (f32) x4, .fy = (f32) y4 }, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } }
 	});
-	// printf("%f, %f, %f, %f", (float) ctx->drawbuf.svec[0].col[0], (float) ctx->drawbuf.svec[0].col[1], (float) ctx->drawbuf.svec[0].col[2], (float) ctx->drawbuf.svec[0].col[3]);
   vpusharr(ctx->drawbuf.idvec, { 0, 1, 2, 2, 0, 3 });
 }
 
