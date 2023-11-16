@@ -1,0 +1,33 @@
+[
+	{
+	  "directory": "d:/projects/c/2dgfx/",
+	  "file": "main.c",
+	  "output": "main.o",
+	  "arguments": ["clang", "-xc", "main.c", "-D_CRT_SECURE_NO_WARNINGS", "-I", "./deps/include", "-I", "./lib", "-c"]
+	},{
+	  "directory": "d:/projects/c/2dgfx/",
+	  "file": "lib/2dgfx.c",
+	  "output": "futil.o",
+	  "arguments": ["clang", "-xc", "lib/2dgfx.c", "-D_CRT_SECURE_NO_WARNINGS", "-I", "./deps/include", "-I", "./lib", "-c"]
+	},{
+	  "directory": "d:/projects/c/2dgfx/",
+	  "file": "deps/hash.c",
+	  "output": "hash.o",
+	  "arguments": ["clang", "-xc", "deps/hash.c", "-D_CRT_SECURE_NO_WARNINGS", "-I", "./deps/include", "-I", "./lib", "-c"]
+	},{
+	  "directory": "d:/projects/c/2dgfx/",
+	  "file": "deps/spng.c",
+	  "output": "spng.o",
+	  "arguments": ["clang", "-xc", "deps/spng.c", "-D_CRT_SECURE_NO_WARNINGS", "-I", "./deps/include", "-I", "./lib", "-c"]
+	},{
+	  "directory": "d:/projects/c/2dgfx/",
+	  "file": "deps/hashfunc.c",
+	  "output": "hashfunc.o",
+	  "arguments": ["clang", "-xc", "deps/hashfunc.c", "-D_CRT_SECURE_NO_WARNINGS", "-I", "./deps/include", "-I", "./lib", "-c"]
+	},{
+	  "directory": "d:/projects/c/2dgfx/",
+	  "file": "deps/vec.c",
+	  "output": "vec.o",
+	  "arguments": ["clang", "-xc", "deps/vec.c", "-D_CRT_SECURE_NO_WARNINGS", "-I", "./deps/include", "-I", "./lib", "-c"]
+	}
+]
