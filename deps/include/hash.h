@@ -26,11 +26,11 @@ struct GENERIC_TABLE_ {
 // Defines an item for the hashtable. Types for `k` get messed up when you pass in `char*` but we ignore it bc it barely matters.
 // #define ITEMNAMEMANGLER HASH
 // #define item(key, val) struct HASH_CONCAT(itemht_, __LINE__, ITEMNAMEMANGLER) { key* k; val* v; struct HASH_CONCAT(itemht_, __LINE__, ITEMNAMEMANGLER)* next; }
-#define item(key, val) struct { key* k; val* v; void* next; }
+#define HASH_ITEM(key, val) struct { key* k; val* v; void* next; }
 
 // Defines a hashtable type.
 #define ht(key, val) struct { TABLEFIELDS\
-  key** keys; item(key, val)* items; }
+  key** keys; HASH_ITEM(key, val)* items; }
 
 // macros for easy hashtable method calling, main api:
 #define hkeyt(htb) typeof(**(htb).keys)
@@ -60,6 +60,8 @@ struct GENERIC_TABLE_ {
 #define hreset(htb) htreset((struct GENERIC_TABLE_*) &(htb))
 
 #define hlastv(htb) (((typeof((htb).items)) ((htb).keys[(htb).n - 1]))->v)
+#define hgetn(htb, idx) (((typeof((htb).items)) ((htb).keys[idx]))->v)
+#define hfirst(htb) ((typeof((htb).items)) ((htb).keys[0]))
 
 // Raw Hashtable methods
 void  htinit(struct GENERIC_TABLE_* t, unsigned int size);
