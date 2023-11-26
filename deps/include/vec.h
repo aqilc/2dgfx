@@ -85,5 +85,6 @@ void  vpusharr_(void** v, uint32_t thingsize, void* thing);
 void  vpushn_(void** v, uint32_t n, uint32_t size, void* thing);
 void* vunshift_(void** v, uint32_t size);
 void* vpop_(void* v, uint32_t size);
+char* vfmt(char* str, ...);
 
 #endif

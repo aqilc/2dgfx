@@ -1,15 +1,19 @@
 /*
- * vec.c v1.0.0 - Aqil Contractor @AqilCont 2023
+ * vec.c v1.0.0 - Aqil Contractor @AqilC 2023
  * Licenced under Attribution-NonCommercial-ShareAlike 3.0
  *
  * This file includes all of the source for the Vector library macros and functions.
  * Compile this separately into a .o, .obj, .a, .dll or .lib and link into your project to use it appropriately.
+ *
+ * WARNING: CURRENTLY NOT THREAD SAFE. Use with caution when using in thread safe code!
  */
 
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include "vec.h"
+
+char* fmtstr;
 
 // Just callocs a vec lol
 void* vnew() { return (struct vecdata_*)calloc(1, sizeof(struct vecdata_)) + 1; }
@@ -58,25 +62,26 @@ void vfree(void* v) { free(_DATA(v)); }
 
 
 // Reallocs more size for the array, hopefully without moves o.o
-void* alloc_(struct vecdata_* data, uint32_t size) {
+static inline void* alloc_(struct vecdata_* data, uint32_t size) {
 	data->used += size;
 	if(data->cap < data->used) {
-		data->cap += data->used - data->cap;
+		data->cap = data->used;
 		return (struct vecdata_*)realloc(data, sizeof(struct vecdata_) + data->cap) + 1;
 	}
 	return data + 1;
 }
 
 // Pushes more data onto the array, CAN CHANGE THE PTR U PASS INTO IT
-void* vpush_(void** v, uint32_t size) {
+static inline void* vpush__(void** v, uint32_t size) {
 	struct vecdata_* data = _DATA(*v = alloc_(_DATA(*v), size));
 	return data->data + data->used - size;
 }
+void* vpush_(void** v, uint32_t size) { return vpush__(v, size); }
 
 // Allocates memory for a string and then pushes
 void vpushs_(void** v, char* str) {
 	uint32_t len = strlen(str);
-	memcpy(vpush_(v, len + 1), str, len + 1);
+	memcpy(vpush__(v, len + 1), str, len + 1);
 	_DATA(*v)->used --;
 }
 
@@ -87,24 +92,24 @@ void vpushsf_(void** v, char* fmt, ...) {
 	va_list args2;
 	va_start(args2, fmt);
 	uint32_t len = vsnprintf(NULL, 0, fmt, args);
-	vsnprintf(vpush_(v, len), len, fmt, args2);
+	vsnprintf(vpush__(v, len), len, fmt, args2);
 	va_end(args);
 	va_end(args2);
 }
 
 void vpushn_(void** v, uint32_t n, uint32_t size, void* thing) {
-	char* place = vpush_(v, n * size);
+	char* place = vpush__(v, n * size);
 	if(size == 1) memset(place, *((char*) thing), size);
 	else for(int i = 0; i < n; i ++) memcpy(place + size * i, thing, size);
 }
 
-void vpusharr_(void** v, uint32_t thingsize, void* thing) { memcpy(vpush_(v, thingsize), thing, thingsize); }
+void vpusharr_(void** v, uint32_t thingsize, void* thing) { memcpy(vpush__(v, thingsize), thing, thingsize); }
 
 void* vpop_(void* v, uint32_t size) { _DATA(v)->used -= size; return _DATA(v)->data + _DATA(v)->used; }
 
 // Adds an element at the start of the vector, ALSO CHANGES PTR
 void* vunshift_(void** v, uint32_t size) {
-	memmove((char*) (*v = alloc_(_DATA(*v), size)) + size, *v, ((struct vecdata_*) *v)->used);
+	memmove((char*) (*v = alloc_(_DATA(*v), size)) + size, *v, _DATA(*v)->used);
 	return *v;
 }
 
@@ -114,3 +119,18 @@ void vremove_(void* v, uint32_t size, uint32_t pos) {
 	_DATA(v)->used -= size;
 }
 
+char* vfmt(char* str, ...) {
+	if(!fmtstr) fmtstr = vnew();
+	
+	va_list args;
+	va_start(args, str);
+	va_list args2;
+	va_start(args2, str);
+	uint32_t len = vsnprintf(NULL, 0, str, args);
+	if(len - _DATA(fmtstr)->used > 0)
+		vpush__((void**) &fmtstr, len - _DATA(fmtstr)->used);
+	vsnprintf(fmtstr, len, str, args2);
+	va_end(args);
+	va_end(args2);
+	return fmtstr;
+}
