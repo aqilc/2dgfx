@@ -54,3 +54,5 @@ dkms.conf
 # Local Tooling Files
 .cache
 .vscode
+build
+bin

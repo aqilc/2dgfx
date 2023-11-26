@@ -1,71 +1,38 @@
 
 #include <stdio.h>
 
-// GLEW, for opengl functions
-#define GLEW_STATIC
-#include <GL/glew.h>
-
-// Window management
-#include <GLFW/glfw3.h>
-
-
 // My custom graphics lib :3
 #include <2dgfx.h>
-
-// void mouse_button_callback(GLFWwindow* window, int button, int action, int mods);
-// void cursor_position_callback(GLFWwindow* window, double xpos, double ypos);
-
-// void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
-
-GLFWwindow* window;
+#include <vec.h>
 
 int main(void) {
 
-  /* Initialize the library */
-  if (!glfwInit())
-    return -1;
-  
-  // GLFW hints
-  // glfwWindowHint(GLFW_DECORATED, GL_FALSE);
-  // glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, GL_TRUE);
-  glfwWindowHint(GLFW_SAMPLES, 4);
-  glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
-  
-  /* Create a windowed mode window and its OpenGL context */
-  window = glfwCreateWindow(800, 600, "Hello World", NULL, NULL);
-  if (!window) {
-    puts("couldn't initialize window???");
-    glfwTerminate(); return -1; }
-  /* Make the window's context current */
-  glfwMakeContextCurrent(window);
-  
-  // Set the framerate to the framerate of the screen, basically 60fps.
-  glfwSwapInterval(1);
-  
-  // Initialize GLEW so we can reference OpenGL functions.
-  if(glewInit()/* != GLEW_OK */) {
-    printf("error with initializing glew");
-    glfwTerminate(); return -1; }
+  // https://www.glfw.org/docs/3.0/window.html#window_fbsize
+  // glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
 
-  // GLFW input callbacks
-  // glfwSetMouseButtonCallback(window, mouse_button_callback);
-  // glfwSetCursorPosCallback(window, cursor_position_callback);
-  // glfwSetKeyCallback(window, key_callback);
-
-  gfx_init(800, 600);
+  gfx_init("2dgfx", 800, 600);
   img hi = gfx_loadimg("hyperAngery.png");
+  typeface fon = gfx_loadfont("Roboto-Medium.ttf");
+  char* fps;
+  
+  while(gfx_nextframe()) {
 
-  while(!glfwWindowShouldClose(window)) {
-    glClear(GL_COLOR_BUFFER_BIT);
-
+    gfx_vector m = gfx_mouse();
     fill(255, 255, 255, 255);
-    rect(100, 100, 200, 200);
-    image(hi, 200, 200, 100, 100);
-    draw();
+    rect(m.x, m.y, 20, 20);
+    image(hi, 350, 200, 100, 100);
+    fontsize(20);
+    // text("h", 100, 400);
+    text("hello! THIS IS FINALLY WORKING PROPERLY WOOOOOO eahubrancodikr", 10, 400);
+    text("AAAAAAAAAAAA YES YOU YOU DON'T DISTORT ANYMOER", 10, 430);
+
+    // printf("%.2f  ", gfx_fps());
+    if(gfx_fpschanged())
+      fps = vfmt("%.4f fps", gfx_fps());
+    text(fps, 800 - 200, 600 - 10);
     
     //glfwSetWindowShouldClose(window, 1);
-    glfwSwapBuffers(window);
-    glfwPollEvents();
+    gfx_frameend();
   }
 
   return 0;
