@@ -255,20 +255,18 @@ void main() {
 		text = texture(u_tex, v_uv);
 		color = vec4(text.rgb, text.a * v_col.a); // Image rendering
 	}
-// 	// color = u_shape == 1 ? vec4(text.r * v_col.rgba) : u_shape == 0 ? v_col : vec4(text.rgb, text.a * v_col.a);
-// 	// color = u_shape ? v_col : text;
-// 	// color = vec4(1.0, 1.0, 1.0, 1.0);
+	// color = u_shape == 1 ? vec4(text.r * v_col.rgba) : u_shape == 0 ? v_col : vec4(text.rgb, text.a * v_col.a);
+	// color = u_shape ? v_col : text;
+	// color = vec4(1.0, 1.0, 1.0, 1.0);
 }
 )
 };
 
-struct uglsLayoutElement {
+struct gfx_layoutelement {
 	GLenum type;
 	u32 count;
 	bool normalized;
 };
-
-// UGLF: User Graphics Library Function
 
 static inline u32 gfx_glsizeof(GLenum type) {
 	switch(type) {
@@ -279,7 +277,7 @@ static inline u32 gfx_glsizeof(GLenum type) {
 	}
 }
 
-static inline void gfx_applylayout(u32 count, struct uglsLayoutElement* elems) {
+static inline void gfx_applylayout(u32 count, struct gfx_layoutelement* elems) {
 	size_t offset = 0, stride = 0;
 	for (u32 i = 0; i < count; i ++) stride += elems[i].count * gfx_glsizeof(elems[i].type);
 	for (u32 i = 0; i < count; i ++) {
@@ -336,6 +334,9 @@ static GLuint gfx_shaderprog(const char* vert, const char* frag) {
 
 // ----------------------------------- Small Font Atlas Library -----------------------------------
 
+// Algorithm's concept picked up from: https://blackpawn.com/texts/lightmaps/default.html
+// Resizing texture picked up from here: https://straypixels.net/texture-packing-for-fonts/
+// Could use this algorithm with "unused spaces" from here but would require a reimpl: https://github.com/TeamHypersomnia/rectpack2D/
 // gfx_atlas_insert(vnew(), &(struct gfx_atlas_node) { {x, y}, {w, h}, {NULL, NULL}, false }, &(gfx_vector) {w, h})
 static struct gfx_atlas_node* gfx_atlas_insert(struct gfx_atlas_node** buf, u32 parent, gfx_vector* size) {
 	if((*buf)[parent].child[0] == 0 || (*buf)[parent].child[1] == 0) { // idx 0 is taken up by the root node.
@@ -391,11 +392,9 @@ static struct gfx_atlas_node* gfx_atlas_insert(struct gfx_atlas_node** buf, u32 
 		
 		return gfx_atlas_insert(buf, (*buf)[parent].child[0], size);
 	}
-	
-	struct gfx_atlas_node* firstchildres = gfx_atlas_insert(buf, (*buf)[parent].child[0], size);
-	if(firstchildres == NULL)
-		return gfx_atlas_insert(buf, (*buf)[parent].child[1], size);
-	return firstchildres;
+
+	struct gfx_atlas_node* firstchildins = gfx_atlas_insert(buf, (*buf)[parent].child[0], size);
+	return firstchildins == NULL ? gfx_atlas_insert(buf, (*buf)[parent].child[1], size) : firstchildins;
 }
 
 // ------------------------------------------ Util Funcs ------------------------------------------
@@ -611,7 +610,7 @@ static inline void draw(struct gfx_drawbuf* dbuf, u32 slen, u32 ilen) {
 		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ctx->gl.idxbufid);
 		
 		// Applies layout
-		gfx_applylayout(3, (struct uglsLayoutElement[]) {
+		gfx_applylayout(3, (struct gfx_layoutelement[]) {
 			{ GL_FLOAT, 3, false }, // X, Y, Z
 			{ GL_FLOAT, 2, false }, // Texture X, Texture Y
 			{ GL_FLOAT, 4, false }  // Color (RGBA)
@@ -635,7 +634,6 @@ static inline void draw(struct gfx_drawbuf* dbuf, u32 slen, u32 ilen) {
 	// Reset draw buffers and Z axis
 	if(dbuf == &ctx->drawbuf)
 		vempty(dbuf->shp), vempty(dbuf->idx);
-	ctx->z = -1.0f;
 }
 
 

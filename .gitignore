@@ -52,6 +52,7 @@ Mkfile.old
 dkms.conf
 
 # Local Tooling Files
+*.png
 .cache
 .vscode
 build
