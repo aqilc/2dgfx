@@ -60,6 +60,8 @@ struct vecdata_ {
 // #define vpush(x, ...) (memcpy(vpush_((void**) &(x), sizeof((typeof(x)) { __VA_ARGS__ })), (typeof(x)) { __VA_ARGS__ }, sizeof((typeof(x)) { __VA_ARGS__ })))
 // expands to: memcpy((int*)vpush_((void*) &data, 4), (((*data))[]) {5}, sizeof(((*data)[]) {5}));
 
+// V String that has length info and is automatically push-able
+typedef char* vstr;
 
 // All you need to get started with this vector lib!
 void* vnew();
@@ -76,7 +78,6 @@ char* strtov(char* s);
 void vclear_(void** v);
 void vempty(void* v);
 char* vtostr_(void** v);
-// void _alloc(struct vecdata_** data, u8 size);
 void  vremove_(void* v, uint32_t size, uint32_t pos);
 void* vpush_(void** v, uint32_t size);
 void  vpushs_(void** v, char* str);
@@ -86,5 +87,6 @@ void  vpushn_(void** v, uint32_t n, uint32_t size, void* thing);
 void* vunshift_(void** v, uint32_t size);
 void* vpop_(void* v, uint32_t size);
 char* vfmt(char* str, ...);
+
 
 #endif
