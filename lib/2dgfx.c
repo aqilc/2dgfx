@@ -68,7 +68,7 @@ typedef int64_t i64;
 typedef float f32;
 typedef double f64;
 
-// #define GFX_DEBUG
+#define GFX_DEBUG
 #ifdef GFX_DEBUG
 	#include <stdarg.h>
 	#define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -549,8 +549,8 @@ struct gfx_ctx* gfx_init(const char* title, u32 w, u32 h) {
 	#endif
 
 	// Enables OpenGL Features
+	glEnable(GL_MULTISAMPLE);
 	glEnable(GL_BLEND);
-	glEnable(GL_MULTISAMPLE);  
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glDisable(GL_CULL_FACE);
 	// glEnable(GL_DEPTH_TEST);
@@ -737,6 +737,11 @@ static inline void gfx_texupload(img tex) {
 	
 	gfx_texture* t = ctx->textures + tex;
 	gfx_texture_type type = t->type;
+	GLenum format;
+
+	if(type == GFX_TEX_TYPEFACE)
+		glPixelStorei(GL_UNPACK_ALIGNMENT, 1), format = GL_RED;
+	else glPixelStorei(GL_UNPACK_ALIGNMENT, 4), format = GL_RGBA;
 	
 	// Generates and binds the texture
 	glGenTextures(1, &t->id);
@@ -750,7 +755,6 @@ static inline void gfx_texupload(img tex) {
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
 	// Sends texture data to the gpu
-	GLenum format = type == GFX_TEX_TYPEFACE ? GL_RED : GL_RGBA;
 	glTexImage2D(GL_TEXTURE_2D, 0, format, t->size.w, t->size.h, 0, format, GL_UNSIGNED_BYTE, t->tex);
 	
 	// We just don't need mipmaps for fonts so we do this for normal images
@@ -845,7 +849,7 @@ static gfx_char* gfx_loadfontchar(typeface tf, FT_ULong c) {
 	gfx_typeface* face = ctx->fonts.store + tf;
 	gfx_texture* tex = ctx->textures + face->tex;
 	CHECK_CALL(FT_Load_Char(face->face, c, FT_LOAD_RENDER), return NULL, "Couldn't load char '%c' (%X)", c, c);
-
+	
 	int width = ((FT_Face) face->face)->glyph->bitmap.width;
 	int height = ((FT_Face) face->face)->glyph->bitmap.rows;
 	gfx_vector size = { width, height };
@@ -880,6 +884,7 @@ static gfx_char* gfx_loadfontchar(typeface tf, FT_ULong c) {
 		memcpy(t + i * tex->size.w, ((FT_Face) face->face)->glyph->bitmap.buffer + i * w, w);
 
 	face->added = true;
+	sizeof(**(face->chars).keys);
 	hset(face->chars, c) = (gfx_char) {
 		.c = c,
 		.size = size,
@@ -914,7 +919,7 @@ typeface gfx_loadfont(const char* file) {
 
 	// Loads the new face in using the library
 	CHECK_CALL(FT_New_Face(ft, file, 0, (FT_Face*) &new.face), return -1, "Couldn't load font '%s'", file);
-	FT_Set_Pixel_Sizes(new.face, 0, 48);
+	FT_Set_Pixel_Sizes(new.face, 0, 16);
 
 	// Adds space_width
 	CHECK_CALL(FT_Load_Char(new.face, ' ', FT_LOAD_RENDER), return -1, "Couldn't load the Space Character ( ) ");
@@ -968,7 +973,7 @@ void text(const char* str, int x, int y) {
 
 	gfx_typeface* face = ctx->fonts.store + ctx->fonts.cur;
 	gfx_texture* tex = ctx->textures + face->tex;
-	f32 scale = (f32) ctx->fonts.size * 4.0f / 3.0f /*px -> pts*/ / 48.0f;
+	f32 scale = (f32) ctx->fonts.size * 4.0f / 3.0f /*px -> pts*/ / 16.0f;
 	ctx->z += .001f;
 
 	FT_ULong point;
