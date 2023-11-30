@@ -15,8 +15,12 @@
 
 char* fmtstr;
 
-// Just callocs a vec lol
-void* vnew() { return (struct vecdata_*)calloc(1, sizeof(struct vecdata_)) + 1; }
+// Callocs a vec with a cap of 8 so subsequent pushes don't immediately trigger reallocation.
+void* vnew() {
+	struct vecdata_* v = calloc(1, sizeof(struct vecdata_) + 16 * sizeof(char));
+	v->cap = 16;
+	return v + 1;
+}
 
 // Combines two vectors into a new vector (USE THIS FOR STRING VECS INSTEAD OF _PUSHS PLS I BEG)
 void* vcat(void* a, void* b) {
@@ -65,7 +69,7 @@ void vfree(void* v) { free(_DATA(v)); }
 static inline void* alloc_(struct vecdata_* data, uint32_t size) {
 	data->used += size;
 	if(data->cap < data->used) {
-		data->cap = data->used;
+		data->cap = data->used + (data->used >> 2) + 16;
 		return (struct vecdata_*)realloc(data, sizeof(struct vecdata_) + data->cap) + 1;
 	}
 	return data + 1;
@@ -103,8 +107,6 @@ void vpushn_(void** v, uint32_t n, uint32_t size, void* thing) {
 	else for(int i = 0; i < n; i ++) memcpy(place + size * i, thing, size);
 }
 
-void vpusharr_(void** v, uint32_t thingsize, void* thing) { memcpy(vpush__(v, thingsize), thing, thingsize); }
-
 void* vpop_(void* v, uint32_t size) { _DATA(v)->used -= size; return _DATA(v)->data + _DATA(v)->used; }
 
 // Adds an element at the start of the vector, ALSO CHANGES PTR
@@ -126,7 +128,7 @@ char* vfmt(char* str, ...) {
 	va_start(args, str);
 	va_list args2;
 	va_start(args2, str);
-	uint32_t len = vsnprintf(NULL, 0, str, args);
+	uint32_t len = vsnprintf(NULL, 0, str, args) + 1;
 	if(len - _DATA(fmtstr)->used > 0)
 		vpush__((void**) &fmtstr, len - _DATA(fmtstr)->used);
 	vsnprintf(fmtstr, len, str, args2);

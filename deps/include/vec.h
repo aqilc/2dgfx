@@ -17,7 +17,7 @@ struct vecdata_ {
 #define vpush(x, ...) (*((typeof(x)) vpush_((void**)&(x), sizeof(*(x)))) = (typeof(*x)) __VA_ARGS__)
 // vpush(data, 5); expands to something like: *(int*)vpush_((void**) &data, 4) = (int) 5;
 
-#define vpusharr(x, ...) vpusharr_((void**)&(x), sizeof((typeof(*(x))[]) __VA_ARGS__), (typeof(*(x))[]) __VA_ARGS__)
+#define vpusharr(x, ...) memcpy(vpush_((void**)&(x), sizeof((typeof(*(x))[]) __VA_ARGS__)), (typeof(*(x))[]) __VA_ARGS__, sizeof((typeof(*(x))[]) __VA_ARGS__))
 
 // Push n items onto the vector, so we can allocate more space at once
 #define vpushn(x, n, y) /*_Generic(*(x), */vpushn_((void**) &(x), (n), sizeof(*(x)), &((typeof(*(x))) {y}))//)

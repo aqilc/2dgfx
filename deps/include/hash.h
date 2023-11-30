@@ -1,15 +1,13 @@
 #ifndef HASH_H
 #define HASH_H
-#include <stdint.h>
 #include <stdbool.h>
-#include <string.h>
 
 
 #pragma GCC diagnostic ignored "-Wunused-value"
 
 // Generic structs for sizing
 struct GENERIC_ITEM_ { void* k; void* v; struct GENERIC_ITEM_* next; };
-#define TABLEFIELDS int n; int size; int filledbuckets; int ksize;
+#define TABLEFIELDS unsigned int n; unsigned int size; unsigned int filledbuckets; unsigned int ksize;
 struct GENERIC_TABLE_ {
   TABLEFIELDS
 
@@ -38,7 +36,7 @@ struct GENERIC_TABLE_ {
 
 // Resize if there are too many conflicts (n - filledbuckets). Aim for 3/4 filled buckets.
 // What the current algorithm does, is when the number of filled buckets is less than 3/4s of the total items (conflicts exceeds 1/4), it resizes the table.
-#define shouldresize(htb) ((htb).n - (htb).filledbuckets * 4 / 3 >= (htb).filledbuckets)
+#define shouldresize(htb) ((htb).n >= (htb).filledbuckets * 4 / 3)
 #define mayberesize(htb) shouldresize(htb) && _Generic(**(htb).keys,\
   char*: htsresize((struct GENERIC_TABLE_*) &(htb), (htb).size * 3 / 2 + 10),\
   default: htresize((struct GENERIC_TABLE_*) &(htb), (htb).size * 3 / 2 + 10, sizeof(**(htb).keys)))
@@ -63,6 +61,7 @@ struct GENERIC_TABLE_ {
 #define hgetn(htb, idx) (((typeof((htb).items)) ((htb).keys[idx]))->v)
 #define hfirst(htb) ((typeof((htb).items)) ((htb).keys[0]))
 
+
 // Raw Hashtable methods
 void  htinit(struct GENERIC_TABLE_* t, unsigned int size);
 
@@ -74,7 +73,7 @@ void  htreset(struct GENERIC_TABLE_* t);
 
 void* htget(struct GENERIC_TABLE_* t, void* k, unsigned int ksize, bool str);
 
-void* htset(struct GENERIC_TABLE_* t, void* k, unsigned int ksize, size_t vsize, bool str);
+void* htset(struct GENERIC_TABLE_* t, void* k, unsigned int ksize, unsigned int vsize, bool str);
 
 
 /*
