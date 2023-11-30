@@ -11,6 +11,7 @@
  * 		- [-] text()
  *       - [ ] Fix bugs
  *     - [ ] Glyph based loading and rendering.
+ *     - [ ] SDF Based font renderer.
  *     - https://github.com/mightycow/Sluggish/blob/master/code/renderer_gl/main.cpp
  *     - https://steamcdn-a.akamaihd.net/apps/valve/2007/SIGGRAPH2007_AlphaTestedMagnification.pdf
  * 	- Masking
@@ -67,7 +68,7 @@ typedef int64_t i64;
 typedef float f32;
 typedef double f64;
 
-#define GFX_DEBUG
+// #define GFX_DEBUG
 #ifdef GFX_DEBUG
 	#include <stdarg.h>
 	#define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -204,6 +205,8 @@ struct gfx_ctx {
   } transform;
 };
 
+static struct gfx_ctx* ctx = NULL;
+
 
 // -------------------------------- OpenGL Helper Functions + Data --------------------------------
 
@@ -338,63 +341,71 @@ static GLuint gfx_shaderprog(const char* vert, const char* frag) {
 // Resizing texture picked up from here: https://straypixels.net/texture-packing-for-fonts/
 // Could use this algorithm with "unused spaces" from here but would require a reimpl: https://github.com/TeamHypersomnia/rectpack2D/
 // gfx_atlas_insert(vnew(), &(struct gfx_atlas_node) { {x, y}, {w, h}, {NULL, NULL}, false }, &(gfx_vector) {w, h})
-static struct gfx_atlas_node* gfx_atlas_insert(struct gfx_atlas_node** buf, u32 parent, gfx_vector* size) {
-	if((*buf)[parent].child[0] == 0 || (*buf)[parent].child[1] == 0) { // idx 0 is taken up by the root node.
+static struct gfx_atlas_node* gfx_atlas_insert(struct gfx_typeface* face, u32 parent, gfx_vector* size) {
+	struct gfx_atlas_node* prnt = face->atlas_tree + parent;
+
+	// Index 0 is taken up by the root node.
+	if(prnt->child[0] == 0 || prnt->child[1] == 0) {
 		
 		// If the node is already filled
-		if((*buf)[parent].filled) return NULL;
+		if(prnt->filled) return NULL;
+		
+		// If the image fits perfectly in the node, fill it as this ends the recursion.
+		if(prnt->s.w == size->w && prnt->s.h == size->h) {
+			prnt->filled = true;
+			return prnt;
+		}
+
+		// The real size(against the edges of the texture) of the node
+		gfx_vector realsize = prnt->s;
+		if (prnt->p.x + prnt->s.w == INT_MAX) realsize.w = ctx->textures[face->tex].size.w - prnt->p.x;
+		if (prnt->p.y + prnt->s.h == INT_MAX) realsize.h = ctx->textures[face->tex].size.h - prnt->p.y;
 		
 		// If the image doesn't fit in the node
-		if((*buf)[parent].s.x < size->x || (*buf)[parent].s.y < size->y) return NULL;
+		if(realsize.x < size->x || realsize.y < size->y) return NULL;
 		
-		// If the image fits perfectly in the node, return the node since we can't really split anymore anyways
-		if((*buf)[parent].s.x == size->x && (*buf)[parent].s.y == size->y) { (*buf)[parent].filled = true; return (*buf) + parent; }
-		
-		// Splits node
-		struct gfx_atlas_node c1 = {
-			.p = { (*buf)[parent].p.x, (*buf)[parent].p.y }
-		};
+		// Defines children
+		struct gfx_atlas_node c1 = { .p = prnt->p };
 		struct gfx_atlas_node c2 = {};
 		
-		int dw = (*buf)[parent].s.x - size->x;
-		int dh = (*buf)[parent].s.y - size->y;
+		int dw = realsize.x - size->x;
+		int dh = realsize.y - size->y;
 		
-		// Sets everything that would be the same for both type of splits
-		c1.p.x = (*buf)[parent].p.x;
-		c1.p.y = (*buf)[parent].p.y;
-
-		// If the margin between the right of the rect and the edge of the parent rectangle is larger than the margin of the bottom of the rect and the bottom of the parent node
-		if(dw > dh) {
-			// Vertical Split
-			c1.s.x = size->x; // - 1
-			c1.s.y = (*buf)[parent].s.y;
+		// To give the rest of the nodes more space, we need to split where there's more room
+		bool vertsplit = dw > dh;
+		
+		// If the last texture is perfectly going to fit into the last available spot in the texture, split to maximize space (one of them is INT_MAXes)
+		if(dw == 0 && dh == 0) vertsplit = prnt->s.w > prnt->s.h;
+		
+		// Splits the node into two rectangles and assigns them as children
+		if (vertsplit) {
+			c1.s.x = size->x;
+			c1.s.y = prnt->s.y;
 			
-			c2.p.x = (*buf)[parent].p.x + size->x;
-			c2.p.y = (*buf)[parent].p.y;
-			c2.s.x = (*buf)[parent].s.x - size->x;
-			c2.s.y = (*buf)[parent].s.y;
-			
+			c2.p.x = prnt->p.x + size->x;
+			c2.p.y = prnt->p.y;
+			c2.s.x = prnt->s.x - size->x;
+			c2.s.y = prnt->s.y;
 		} else {
-			// Horizontal Split
-			c1.s.x = (*buf)[parent].s.x;
-			c1.s.y = size->y; // - 1
+			c1.s.x = prnt->s.x;
+			c1.s.y = size->y;
 			
-			c2.p.x = (*buf)[parent].p.x;
-			c2.p.y = (*buf)[parent].p.y + size->y;
-			c2.s.x = (*buf)[parent].s.x;
-			c2.s.y = (*buf)[parent].s.y - size->y;
+			c2.p.x = prnt->p.x;
+			c2.p.y = prnt->p.y + size->y;
+			c2.s.x = prnt->s.x;
+			c2.s.y = prnt->s.y - size->y;
 		}
 
 		// All heap allocs are confined to this, makes it much easier to free.
-		vpusharr(*buf, { c1, c2 });
-		(*buf)[parent].child[0] = vlen((*buf)) - 2;
-		(*buf)[parent].child[1] = vlen((*buf)) - 1;
+		vpusharr(face->atlas_tree, { c1, c2 }); // THIS MODIFIES THE POINTER SO YOU CANNOT USE PRNT BECAUSE IT USES THE OLD PTR
+		face->atlas_tree[parent].child[0] = vlen(face->atlas_tree) - 2;
+		face->atlas_tree[parent].child[1] = vlen(face->atlas_tree) - 1;
 		
-		return gfx_atlas_insert(buf, (*buf)[parent].child[0], size);
+		return gfx_atlas_insert(face, face->atlas_tree[parent].child[0], size);
 	}
 
-	struct gfx_atlas_node* firstchildins = gfx_atlas_insert(buf, (*buf)[parent].child[0], size);
-	return firstchildins == NULL ? gfx_atlas_insert(buf, (*buf)[parent].child[1], size) : firstchildins;
+	struct gfx_atlas_node* firstchildins = gfx_atlas_insert(face, prnt->child[0], size);
+	return firstchildins ? firstchildins : gfx_atlas_insert(face, prnt->child[1], size);
 }
 
 // ------------------------------------------ Util Funcs ------------------------------------------
@@ -429,9 +440,6 @@ u8* gfx_readtoimg(char* file, int* width, int* height) {
 }
 
 // ------------------------- OpenGL Helper Functions that Rely on Context -------------------------
-
-static struct gfx_ctx* ctx = NULL;
-
 
 // Gets the location from cache or sets it in cache
 GLint glULoc(char* name) {
@@ -507,10 +515,12 @@ struct gfx_ctx* gfx_init(const char* title, u32 w, u32 h) {
 	CHECK_CALL(!glfwInit(), return NULL, "Couldn't initialize glfw3.");
 
 	// GLFW hints
+	#ifdef GFX_DEBUG
+		glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
+	#endif
 	// glfwWindowHint(GLFW_DECORATED, GL_FALSE);
 	// glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, GL_TRUE);
 	glfwWindowHint(GLFW_SAMPLES, 4);
-	glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
@@ -578,11 +588,14 @@ bool gfx_nextframe() {
 }
 void gfx_frameend() {
 	if(vlen(ctx->drawbuf.shp)) drawtext();
-	ctx->z = -1.f;
+	ctx->z = -1.0f;
 	glfwSwapBuffers(ctx->window);
 	glfwPollEvents();
 }
 
+void gfx_close() {
+	glfwSetWindowShouldClose(ctx->window, 1);
+}
 bool gfx_fpschanged() {
 	return ctx->frame.start - ctx->frame.lastfpscalc >= .25;
 }
@@ -840,22 +853,32 @@ static gfx_char* gfx_loadfontchar(typeface tf, FT_ULong c) {
 	// Tries to add the character, resizing the whole texture until it's done
 	struct gfx_atlas_node* maybe;
 	int growth = 1;
-	while(!(maybe = gfx_atlas_insert(&(face->atlas_tree), 0, &size))) {
+	while(!(maybe = gfx_atlas_insert(face, 0, &size))) {
 		info("Atlas size doubled for font '%s'", face->name);
 		growth *= 2, tex->size.w *= 2, tex->size.h *= 2;
 	}
 
 	if(!tex->tex)
 		tex->tex = malloc(tex->size.w * tex->size.h * sizeof(u8));
-	else if(growth > 1)
-		tex->tex = realloc(tex->tex, tex->size.w * tex->size.h * sizeof(u8));
+	else if(growth > 1) {
+		int ow = tex->size.w / growth, oh = tex->size.h / growth;
+		u8* ntex = malloc(tex->size.w * tex->size.h * sizeof(u8));
+		u8* otex = tex->tex;
+		
+		for(int i = 0; i < oh; i ++)
+			memcpy(ntex + i * tex->size.w, otex + i * ow, ow);
+
+		tex->tex = ntex;
+		free(otex);
+	}
 
 	// Writes the character's pixels to the atlas buffer.
 	int x = maybe->p.x, y = maybe->p.y;
 	int w = size.w,     h = size.h;
-	for(int i = 0; i < w * h; i ++)
-		tex->tex[x + y * tex->size.w + i % w + (i / w * tex->size.h)] = ((FT_Face) face->face)->glyph->bitmap.buffer[i];
-	
+	u8* t = tex->tex + x + y * tex->size.w;
+	for(int i = 0; i < h; i ++)
+		memcpy(t + i * tex->size.w, ((FT_Face) face->face)->glyph->bitmap.buffer + i * w, w);
+
 	face->added = true;
 	hset(face->chars, c) = (gfx_char) {
 		.c = c,
@@ -883,7 +906,7 @@ typeface gfx_loadfont(const char* file) {
 		.face = NULL
 	};
 	memcpy(new.name, file, strlen(file) + 1);
-	vpush(new.atlas_tree, { .s = ctx->textures[new.tex].size });
+	vpush(new.atlas_tree, { .s = { INT_MAX, INT_MAX } });
 	
 	// Loads the freetype library.
 	if(!ft)
@@ -970,8 +993,8 @@ void text(const char* str, int x, int y) {
 
 		realx = (f32) curx + ch->bearing.x * scale;
 		realy = (f32) cury - ch->bearing.y * scale;
-    w     = (f32) ch->size.w * scale;
-    h     = (f32) ch->size.h * scale;
+		w     = (f32) ch->size.w * scale;
+		h     = (f32) ch->size.h * scale;
 
 		tx = ch->place.x / (f32) tex->size.w;
 		ty = ch->place.y / (f32) tex->size.h;

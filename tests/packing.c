@@ -57,72 +57,75 @@ struct gfx_atlas_node {
   bool filled;
 };
 
-struct gfx_atlas_root_node {
-	gfx_vector size;
-	struct gfx_atlas_node* buf;
-};
-
 // Algorithm's concept picked up from: https://blackpawn.com/texts/lightmaps/default.html
 // Resizing texture picked up from here: https://straypixels.net/texture-packing-for-fonts/
 // Could use this algorithm with "unused spaces" from here but would require a reimpl: https://github.com/TeamHypersomnia/rectpack2D/
 // gfx_atlas_insert(vnew(), &(struct gfx_atlas_node) { {x, y}, {w, h}, {NULL, NULL}, false }, &(gfx_vector) {w, h})
 static struct gfx_atlas_node* gfx_atlas_insert(struct gfx_typeface* face, u32 parent, gfx_vector* size) {
-	if(face->atlas_tree[parent].child[0] == 0 || face->atlas_tree[parent].child[1] == 0) { // idx 0 is taken up by the root node.
+	struct gfx_atlas_node* prnt = face->atlas_tree + parent;
+
+	// Index 0 is taken up by the root node.
+	if(prnt->child[0] == 0 || prnt->child[1] == 0) {
 		
 		// If the node is already filled
-		if(face->atlas_tree[parent].filled) return NULL;
+		if(prnt->filled) return NULL;
+		
+		// If the image fits perfectly in the node, fill it as this ends the recursion.
+		if(prnt->s.w == size->w && prnt->s.h == size->h) {
+			prnt->filled = true;
+			return prnt;
+		}
+
+		// The real size(against the edges of the texture) of the node
+		gfx_vector realsize = prnt->s;
+		if (prnt->p.x + prnt->s.w == INT_MAX) realsize.w = face->tex->size.w - prnt->p.x;
+		if (prnt->p.y + prnt->s.h == INT_MAX) realsize.h = face->tex->size.h - prnt->p.y;
 		
 		// If the image doesn't fit in the node
-		if(face->atlas_tree[parent].s.x < size->x || face->atlas_tree[parent].s.y < size->y) return NULL;
+		if(realsize.x < size->x || realsize.y < size->y) return NULL;
 		
-		// If the image fits perfectly in the node, return the node since we can't really split anymore anyways
-		if(face->atlas_tree[parent].s.x == size->x && face->atlas_tree[parent].s.y == size->y) { face->atlas_tree[parent].filled = true; return face->atlas_tree + parent; }
-		
-		// Splits node
-		struct gfx_atlas_node c1 = {
-			.p = { face->atlas_tree[parent].p.x, face->atlas_tree[parent].p.y }
-		};
+		// Defines children
+		struct gfx_atlas_node c1 = { .p = prnt->p };
 		struct gfx_atlas_node c2 = {};
 		
-		int dw = face->atlas_tree[parent].s.x - size->x;
-		int dh = face->atlas_tree[parent].s.y - size->y;
+		int dw = realsize.x - size->x;
+		int dh = realsize.y - size->y;
 		
-		// Sets everything that would be the same for both type of splits
-		c1.p.x = face->atlas_tree[parent].p.x;
-		c1.p.y = face->atlas_tree[parent].p.y;
-
-		// If the margin between the right of the rect and the edge of the parent rectangle is larger than the margin of the bottom of the rect and the bottom of the parent node
-		if(dw > dh) {
-			// Vertical Split
-			c1.s.x = size->x; // - 1
-			c1.s.y = face->atlas_tree[parent].s.y;
+		// To give the rest of the nodes more space, we need to split where there's more room
+		bool vertsplit = dw > dh;
+		
+		// If the last texture is perfectly going to fit into the last available spot in the texture, split to maximize space (one of them is INT_MAXes)
+		if(dw == 0 && dh == 0) vertsplit = prnt->s.w > prnt->s.h;
+		
+		// Splits the node into two rectangles and assigns them as children
+		if (vertsplit) {
+			c1.s.x = size->x;
+			c1.s.y = prnt->s.y;
 			
-			c2.p.x = face->atlas_tree[parent].p.x + size->x;
-			c2.p.y = face->atlas_tree[parent].p.y;
-			c2.s.x = face->atlas_tree[parent].s.x - size->x;
-			c2.s.y = face->atlas_tree[parent].s.y;
-			
+			c2.p.x = prnt->p.x + size->x;
+			c2.p.y = prnt->p.y;
+			c2.s.x = prnt->s.x - size->x;
+			c2.s.y = prnt->s.y;
 		} else {
-			// Horizontal Split
-			c1.s.x = face->atlas_tree[parent].s.x;
-			c1.s.y = size->y; // - 1
+			c1.s.x = prnt->s.x;
+			c1.s.y = size->y;
 			
-			c2.p.x = face->atlas_tree[parent].p.x;
-			c2.p.y = face->atlas_tree[parent].p.y + size->y;
-			c2.s.x = face->atlas_tree[parent].s.x;
-			c2.s.y = face->atlas_tree[parent].s.y - size->y;
+			c2.p.x = prnt->p.x;
+			c2.p.y = prnt->p.y + size->y;
+			c2.s.x = prnt->s.x;
+			c2.s.y = prnt->s.y - size->y;
 		}
 
 		// All heap allocs are confined to this, makes it much easier to free.
-		vpusharr(face->atlas_tree, { c1, c2 });
+		vpusharr(face->atlas_tree, { c1, c2 }); // THIS MODIFIES THE POINTER SO YOU CANNOT USE PRNT BECAUSE IT USES THE OLD PTR
 		face->atlas_tree[parent].child[0] = vlen(face->atlas_tree) - 2;
 		face->atlas_tree[parent].child[1] = vlen(face->atlas_tree) - 1;
 		
 		return gfx_atlas_insert(face, face->atlas_tree[parent].child[0], size);
 	}
 
-	struct gfx_atlas_node* firstchildins = gfx_atlas_insert(face, face->atlas_tree[parent].child[0], size);
-	return firstchildins == NULL ? gfx_atlas_insert(face, face->atlas_tree[parent].child[1], size) : firstchildins;
+	struct gfx_atlas_node* firstchildins = gfx_atlas_insert(face, prnt->child[0], size);
+	return firstchildins ? firstchildins : gfx_atlas_insert(face, prnt->child[1], size);
 }
 
 
@@ -164,14 +167,14 @@ static void gfx_loadfontchar(FT_ULong c) {
 	}
 
 	if(!face->tex->tex)
-		face->tex->tex = malloc(face->tex->size.w * growth * face->tex->size.h * growth * sizeof(u8));
+		face->tex->tex = malloc(face->tex->size.w * face->tex->size.h * sizeof(u8));
 	else if(growth > 1) {
-		int w = face->tex->size.w / growth, h = face->tex->size.h / growth;
-		u8* ntex = malloc(w * growth * h * growth * sizeof(u8));
+		int ow = face->tex->size.w / growth, oh = face->tex->size.h / growth;
+		u8* ntex = malloc(face->tex->size.w * face->tex->size.h * sizeof(u8));
 		u8* otex = face->tex->tex;
 		
-		for(int i = 0; i < h; i ++)
-			memcpy(ntex + i * w * growth, otex + i * w, w);
+		for(int i = 0; i < oh; i ++)
+			memcpy(ntex + i * face->tex->size.w, otex + i * ow, ow);
 
 		face->tex->tex = ntex;
 		free(otex);
@@ -183,7 +186,6 @@ static void gfx_loadfontchar(FT_ULong c) {
 	u8* t = face->tex->tex + x + y * face->tex->size.w;
 	for(int i = 0; i < h; i ++)
 		memcpy(t + i * face->tex->size.w, ((FT_Face) face->face)->glyph->bitmap.buffer + i * w, w);
-		// t[i % w + (i / w * face->tex->size.h)] = ((FT_Face) face->face)->glyph->bitmap.buffer[i];
 	
 	face->added = true;
 	hset(face->chars, c) = (gfx_char) {
@@ -236,6 +238,7 @@ void text(const char* str) {
 		
 		gfx_char* ch = hget(face->chars, point);
 		if(!ch) gfx_loadfontchar(point);
+		else printf("'%c': %d, %d\n", (char) ch->c, ch->place.w, ch->place.h);
 	}
 }
 
@@ -246,7 +249,7 @@ TEST("Load a font") {
 }
 
 TEST("Load some characters") {
-	text("hphspirkdbpu,arcigdbp,crgidxbrcap,xidhbscga,pdxiybsrcga,pgdxbyirucp.agidxap,fg4389yfdh2408cydfs2039yg42l0sy6'2040'02d4ydhas4rf;ii");
+	text("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890,.()[]~`!@^#$%&*|\\/-_><\"';:+=?");
 }
 
 TEST("Write bitmap to disk") {

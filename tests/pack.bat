@@ -37,8 +37,8 @@ cd ..
 rmdir bin
 
 test
-rem del test.exe
-rem del test.pdb
+del test.exe
+del test.pdb
 
 rem cmake build: 
 rem D:\projects\tools\CMake\bin\cmake.EXE --build d:/projects/rust/apcsp/cdungeon/build --config Debug --target cdungeon -j 6 --

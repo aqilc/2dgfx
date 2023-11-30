@@ -1,8 +1,3 @@
-
-#define GLEW_STATIC
-#include <GL/glew.h>
-#include <GLFW/glfw3.h>
-
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -21,6 +16,7 @@ typedef uint32_t typeface;
 struct gfx_ctx* gfx_init(const char* title, uint32_t w, uint32_t h);
 bool gfx_nextframe();
 void gfx_frameend();
+void gfx_close();
 
 // When using multiple 2DGFX contexts, switch contexts with this.
 void gfx_curctx(struct gfx_ctx* c);
@@ -31,13 +27,12 @@ typeface gfx_loadfont(const char* file);
 // Loads in image through STB_Image
 img gfx_loadimg(char* file);
 
-
 // Input functions
 gfx_vector gfx_mouse();
 
 
 // Drawing commands
-void fill(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+void fill(uint8_t r, uint8_t g, uint8_t b, uint8_t a);
 void quad(int x1, int y1, int x2, int y2, int x3, int y3, int x4, int y4);
 void rect(int x, int y, int w, int h);
 
