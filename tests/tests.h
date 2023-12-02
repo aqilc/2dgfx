@@ -164,7 +164,7 @@ size_t msizeof(const void *p) {
 #define TEST(name) TEST_(name, __COUNTER__)
 
 #define TEST_(name, N) \
-void CONCAT(test_internal_, N)(void);\
+static inline void CONCAT(test_internal_, N)(void);\
 int CONCAT(test_, N)(void) {\
 	asserts = 0;\
 	printf(TERMCYANBOLD "%d)" TERMRESET " " name " " TERMGRAY "(" __FILE__ ":" TOSTRING(__LINE__) ")" TERMRESET "%s %-*s" TERMRESET, N + 1, N % 2 ? TERMWHITEBGBLACK : TERMBLACKBGWHITE, (int) (TESTNAMELIMIT - sizeof(name " (" __FILE__ ":" TOSTRING(__LINE__) ")") + 1 - 3), "");\
@@ -191,7 +191,7 @@ int CONCAT(test_, N)(void) {\
 	}\
 	return 0;\
 }\
-void CONCAT(test_internal_, N)(void)
+static inline void CONCAT(test_internal_, N)(void)
 
 
 #define TESTFUNGEN__(N) TESTFUNC##N

@@ -50,10 +50,7 @@
 
 #define GFX_STR(...) #__VA_ARGS__
 #define GFX_STR_MACRO(...) GFX_STR(__VA_ARGS__)
-
-#ifndef GFX_FONT_ATLAS_START_SIZE
-	#define GFX_FONT_ATLAS_START_SIZE 256
-#endif
+#define GLSL(...) "#version 330 core\n" #__VA_ARGS__
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -218,51 +215,58 @@ static struct {
 	const char* vert;
 	const char* frag;
 } default_shaders = {
-	.vert = "#version 330 core\n" GFX_STR(
-precision mediump float;
-layout (location = 0) in vec4 pos;
-layout (location = 1) in vec2 uv;
-layout (location = 2) in vec4 col;
+	.vert = GLSL(
+		precision mediump float;
+		layout (location = 0) in vec4 pos;
+		layout (location = 1) in vec2 uv;
+		layout (location = 2) in vec4 col;
 
-uniform mat4 u_mvp;
+		uniform mat4 u_mvp;
 
-out vec2 v_uv;
-out vec4 v_col;
+		out vec2 v_uv;
+		out vec4 v_col;
 
-void main() {
-	gl_Position = u_mvp * pos;
-	v_uv = uv;
-	v_col = col;
-}
-),
+		void main() {
+			gl_Position = u_mvp * pos;
+			v_uv = uv;
+			v_col = col;
+		}
+	),
 
-	.frag = "#version 330 core\n" GFX_STR(
-precision mediump float;
-layout (location = 0) out vec4 color;
+	.frag = GLSL(
+		precision mediump float;
+		layout (location = 0) out vec4 color;
 
-in vec2 v_uv;
-in vec4 v_col;
+		in vec2 v_uv;
+		in vec4 v_col;
 
-uniform sampler2D u_tex;
-uniform int u_shape;
+		uniform sampler2D u_tex;
+		uniform int u_shape;
 
-vec4 text;
+		vec4 text;
+		float alpha;
 
-void main() {
-	
-	if(u_shape == 0) {
-		if(v_uv.x < 0) color = v_col; // Shape rendering
-		else color = vec4(texture(u_tex, v_uv).r * v_col.rgba); // Text rendering
-	}
-	else {
-		text = texture(u_tex, v_uv);
-		color = vec4(text.rgb, text.a * v_col.a); // Image rendering
-	}
-	// color = u_shape == 1 ? vec4(text.r * v_col.rgba) : u_shape == 0 ? v_col : vec4(text.rgb, text.a * v_col.a);
-	// color = u_shape ? v_col : text;
-	// color = vec4(1.0, 1.0, 1.0, 1.0);
-}
-)
+		void main() {
+			
+			if(u_shape == 0) {
+				if(v_uv.x < 0) {
+					color = v_col; // Shape rendering
+					return;
+				}
+				alpha = texture(u_tex, v_uv).r;
+				if(alpha > 0.5)
+					color = vec4(alpha * v_col.rgba); // Text rendering
+				else color = vec4(0.0);
+			}
+			else {
+				text = texture(u_tex, v_uv);
+				color = vec4(text.rgb, text.a * v_col.a); // Image rendering
+			}
+			// color = u_shape == 1 ? vec4(text.r * v_col.rgba) : u_shape == 0 ? v_col : vec4(text.rgb, text.a * v_col.a);
+			// color = u_shape ? v_col : text;
+			// color = vec4(1.0, 1.0, 1.0, 1.0);
+		}
+	)
 };
 
 struct gfx_layoutelement {
@@ -845,11 +849,20 @@ static inline FT_ULong gfx_readutf8(u8** str) {
 	return code_point;
 }
 
+
+#define GFX_FONT_ATLAS_START_SIZE 128
+#define RENDERING_FONT_SIZE(...) 24##__VA_ARGS__
+
 static gfx_char* gfx_loadfontchar(typeface tf, FT_ULong c) {
 	gfx_typeface* face = ctx->fonts.store + tf;
 	gfx_texture* tex = ctx->textures + face->tex;
-	CHECK_CALL(FT_Load_Char(face->face, c, FT_LOAD_RENDER), return NULL, "Couldn't load char '%c' (%X)", c, c);
-	
+
+	FT_Error e;
+	// CHECK_CALL((e = FT_Set_Pixel_Sizes(((FT_Face) face->face), 0, RENDERING_FONT_SIZE())), return NULL, "Couldn't set size (Error %d)", e);
+	CHECK_CALL((e = FT_Load_Char(((FT_Face) face->face), c, FT_LOAD_RENDER)), return NULL, "Couldn't load char '%c' (%X) (Error %d)", c, c, e);
+	// CHECK_CALL((e = FT_Set_Pixel_Sizes(((FT_Face) face->face), 0, 200)), return NULL, "Couldn't set size (Error %d)", e);
+	CHECK_CALL((e = FT_Render_Glyph(((FT_Face) face->face)->glyph, FT_RENDER_MODE_SDF)), return NULL, "Couldn't render char '%c' (%X) (Error %d)", c, c, e);
+
 	int width = ((FT_Face) face->face)->glyph->bitmap.width;
 	int height = ((FT_Face) face->face)->glyph->bitmap.rows;
 	gfx_vector size = { width, height };
@@ -863,7 +876,7 @@ static gfx_char* gfx_loadfontchar(typeface tf, FT_ULong c) {
 	}
 
 	if(!tex->tex)
-		tex->tex = malloc(tex->size.w * tex->size.h * sizeof(u8));
+		tex->tex = calloc(1, tex->size.w * tex->size.h * sizeof(u8)); // CHANGE BACK TO MALLOC WHEN POSSIBLE
 	else if(growth > 1) {
 		int ow = tex->size.w / growth, oh = tex->size.h / growth;
 		u8* ntex = malloc(tex->size.w * tex->size.h * sizeof(u8));
@@ -919,7 +932,7 @@ typeface gfx_loadfont(const char* file) {
 
 	// Loads the new face in using the library
 	CHECK_CALL(FT_New_Face(ft, file, 0, (FT_Face*) &new.face), return -1, "Couldn't load font '%s'", file);
-	FT_Set_Pixel_Sizes(new.face, 0, 16);
+	CHECK_CALL(FT_Set_Pixel_Sizes(new.face, 0, RENDERING_FONT_SIZE()), return -1, "Couldn't set size");
 
 	// Adds space_width
 	CHECK_CALL(FT_Load_Char(new.face, ' ', FT_LOAD_RENDER), return -1, "Couldn't load the Space Character ( ) ");
@@ -973,7 +986,7 @@ void text(const char* str, int x, int y) {
 
 	gfx_typeface* face = ctx->fonts.store + ctx->fonts.cur;
 	gfx_texture* tex = ctx->textures + face->tex;
-	f32 scale = (f32) ctx->fonts.size * 4.0f / 3.0f /*px -> pts*/ / 16.0f;
+	f32 scale = (f32) ctx->fonts.size * 4.0f / 3.0f /*px -> pts*/ / RENDERING_FONT_SIZE(.0f);
 	ctx->z += .001f;
 
 	FT_ULong point;

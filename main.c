@@ -8,7 +8,7 @@
 int main(void) {
   gfx_init("2dgfx", 800, 600);
   img hi = gfx_loadimg("hyperAngery.png");
-  typeface fon = gfx_loadfont("Roboto-Medium.ttf");
+  typeface fon = gfx_loadfont("roboto.ttf");
   char* fps = NULL;
   
   while(gfx_nextframe()) {
@@ -19,10 +19,13 @@ int main(void) {
     fontsize(20);
     text("hello! THIS IS FINALLY WORKING PROPERLY WOOOOOO eahubrancodikr", 10, 400);
     text("AAAAAAAAAAAA YES YOU YOU DON'T DISTORT ANYMOER", 10, 430);
+    fontsize(200);
+    text("BIG", 50, 300);
 
 
     if(gfx_fpschanged())
       fps = vfmt("%.2f fps", gfx_fps());
+    fontsize(20);
     if(fps) text(fps, 800 - 150, 600 - 10);
     
     gfx_frameend();
