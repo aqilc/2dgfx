@@ -9,9 +9,15 @@
 #include <stb/stb_image_write.h>
 #include <stdbool.h>
 
-#ifndef GFX_FONT_ATLAS_START_SIZE
-	#define GFX_FONT_ATLAS_START_SIZE 256
-#endif
+
+#define GFX_FONT_ATLAS_START_SIZE 256
+#define RENDERING_FONT_SIZE(...) 104##__VA_ARGS__
+
+#define BUFFER (RENDERING_FONT_SIZE() / 8)
+#define FONTBUFSIZE (RENDERING_FONT_SIZE() + BUFFER * 4)
+#define INF 1e20
+#define RADIUS (RENDERING_FONT_SIZE(.0) / 3.0)
+#define CUTOFF 0.25
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -129,6 +135,45 @@ static struct gfx_atlas_node* gfx_atlas_insert(struct gfx_typeface* face, u32 pa
 }
 
 
+double f[FONTBUFSIZE] = {};
+double z[FONTBUFSIZE + 1] = {};
+int v[FONTBUFSIZE] = {};
+static inline void edt1d(double* grid, u32 offset, u32 stride, u32 length) {
+	v[0] = 0;
+	z[0] = -INF;
+	z[1] = INF;
+	f[0] = grid[offset];
+	
+	double s = 0;
+	for (int q = 1, k = 0; q < length; q++) {
+		f[q] = grid[offset + q * stride];
+		int q2 = q * q;
+		do {
+			int r = v[k];
+			s = (f[q] - f[r] + q2 - r * r) / (q - r) / 2;
+		} while (s <= z[k] && --k > -1);
+
+		k++;
+		v[k] = q;
+		z[k] = s;
+		z[k + 1] = INF;
+	}
+
+	for (int q = 0, k = 0; q < length; q++) {
+		while (z[k + 1] < q) k++;
+		int r = v[k];
+		double qr = q - r;
+		grid[offset + q * stride] = f[r] + qr * qr;
+	}
+}
+static inline void edt(double* data, u32 x0, u32 y0, u32 width, u32 height, u32 gridSize) {
+	for (u32 x = x0; x < x0 + width; x++)
+		edt1d(data, y0 * gridSize + x, gridSize, height);
+		
+	for (u32 y = y0; y < y0 + height; y++)
+		edt1d(data, y * gridSize + x0, 1, width);
+}
+
 // ------------------------------------------------------------------------ STUB FUNCTIONS FROM GFX --------------------------------------------------------------------------
 
 static inline FT_ULong gfx_readutf8(u8** str) {
@@ -151,16 +196,22 @@ static inline FT_ULong gfx_readutf8(u8** str) {
 FT_Library ft;
 typeface face;
 
+double gridOuter[FONTBUFSIZE * FONTBUFSIZE] = {};
+double gridInner[FONTBUFSIZE * FONTBUFSIZE] = {};
+
+
 static void gfx_loadfontchar(FT_ULong c) {
 	FT_Load_Char(face->face, c, FT_LOAD_RENDER);
 
-	int width = ((FT_Face) face->face)->glyph->bitmap.width;
-	int height = ((FT_Face) face->face)->glyph->bitmap.rows;
-	gfx_vector size = { width, height };
+	u32 width = ((FT_Face) face->face)->glyph->bitmap.width;
+	u32 height = ((FT_Face) face->face)->glyph->bitmap.rows;
+	u32 bufwidth = width + 2 * BUFFER;
+	u32 bufheight = height + 2 * BUFFER;
 
 	// Tries to add the character, resizing the whole texture until it's done
 	struct gfx_atlas_node* maybe;
-	int growth = 1;
+	gfx_vector size = { bufwidth, bufheight };
+	u32 growth = 1;
 	while(!(maybe = gfx_atlas_insert(face, 0, &size))) {
 		printf("Atlas size doubled for font '%s'", face->name);
 		growth *= 2, face->tex->size.w *= 2, face->tex->size.h *= 2;
@@ -169,7 +220,7 @@ static void gfx_loadfontchar(FT_ULong c) {
 	if(!face->tex->tex)
 		face->tex->tex = malloc(face->tex->size.w * face->tex->size.h * sizeof(u8));
 	else if(growth > 1) {
-		int ow = face->tex->size.w / growth, oh = face->tex->size.h / growth;
+		u32 ow = face->tex->size.w / growth, oh = face->tex->size.h / growth;
 		u8* ntex = malloc(face->tex->size.w * face->tex->size.h * sizeof(u8));
 		u8* otex = face->tex->tex;
 		
@@ -179,13 +230,47 @@ static void gfx_loadfontchar(FT_ULong c) {
 		face->tex->tex = ntex;
 		free(otex);
 	}
+	
+	u32 len = bufwidth * bufheight;
 
-	// Writes the character's pixels to the atlas buffer.
+	// Initialize grids outside the glyph range to alpha 0
+	for(u32 i = 0; i < len; i ++)
+		gridOuter[i] = INF;
+	memset(gridInner, 0, sizeof(gridInner));
+	memset(f, 0, sizeof(f));
+	memset(z, 0, sizeof(z));
+	memset(v, 0, sizeof(v));
+
+	for (u32 y = 0; y < height; y++) {
+		for (u32 x = 0; x < width; x++) {
+			u8 a = ((FT_Face) face->face)->glyph->bitmap.buffer[y * width + x]; // alpha value
+			if (a == 0) continue; // empty pixels
+
+			u32 j = (y + BUFFER) * bufwidth + x + BUFFER;
+
+			if (a == 255) { // fully drawn pixels
+				gridOuter[j] = 0.0;
+				gridInner[j] = INF;
+			} else { // aliased pixels
+				double d = 0.5 - ((double) a / 255.0);
+				gridOuter[j] = d > 0.0 ? d * d : 0.0;
+				gridInner[j] = d < 0.0 ? d * d : 0.0;
+			}
+		}
+	}
+
+	edt(gridOuter, 0, 0, bufwidth, bufheight, bufwidth);
+	edt(gridInner, BUFFER, BUFFER, width, height, bufwidth);
+
 	int x = maybe->p.x, y = maybe->p.y;
-	int w = size.w,     h = size.h;
-	u8* t = face->tex->tex + x + y * face->tex->size.w;
-	for(int i = 0; i < h; i ++)
-		memcpy(t + i * face->tex->size.w, ((FT_Face) face->face)->glyph->bitmap.buffer + i * w, w);
+	int tw = face->tex->size.w, th = face->tex->size.h;
+	u8* letter = face->tex->tex + x + y * tw;
+	for (u32 i = 0; i < len; i++) {
+		double res = 255.0 - 255.0 * ((sqrt(gridOuter[i]) - sqrt(gridInner[i])) / RADIUS + CUTOFF);
+		if(res >= 255.0) letter[i % bufwidth + (i / bufwidth) * tw] = 255;
+		else if (res <= 0.0) letter[i % bufwidth + (i / bufwidth) * tw] = 0;
+		else letter[i % bufwidth + (i / bufwidth) * tw] = res;
+	}
 	
 	face->added = true;
 	hset(face->chars, c) = (gfx_char) {
@@ -220,7 +305,7 @@ void gfx_loadfont(const char* file) {
 
 	// Loads the new face in using the library
 	if(FT_New_Face(ft, file, 0, (FT_Face*) &font.face)) printf("ooooop couldn't load font");
-	FT_Set_Pixel_Sizes(font.face, 0, 48);
+	FT_Set_Pixel_Sizes(font.face, 0, RENDERING_FONT_SIZE());
 
 	// Adds space_width
 	FT_Load_Char(font.face, ' ', FT_LOAD_RENDER);

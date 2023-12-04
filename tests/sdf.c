@@ -53,53 +53,54 @@ FT_Face face;
 gfx_texture tex;
 
 
-#define GFX_FONT_START_SIZE 96
+#define GFX_FONT_START_SIZE 24
 #define BUFFER (GFX_FONT_START_SIZE / 8)
 #define FONTBUFSIZE (GFX_FONT_START_SIZE + BUFFER * 4)
 #define INF 1.0e20
 #define RADIUS (GFX_FONT_START_SIZE / 3.0)
-#define CUTOFF 0.25
+#define CUTOFF 0.0
 
 double gridOuter[FONTBUFSIZE * FONTBUFSIZE] = {};
 double gridInner[FONTBUFSIZE * FONTBUFSIZE] = {};
 
 double f[FONTBUFSIZE] = {};
 double z[FONTBUFSIZE + 1] = {};
-short v[FONTBUFSIZE] = {};
+int v[FONTBUFSIZE] = {};
 
 static inline void edt1d(double* grid, u32 offset, u32 stride, u32 length) {
-    v[0] = 0;
-    z[0] = -INF;
-    z[1] = INF;
-    f[0] = grid[offset];
+	v[0] = 0;
+	z[0] = -INF;
+	z[1] = INF;
+	f[0] = grid[offset];
+	
+	double s = 0;
+	for (int q = 1, k = 0; q < length; q++) {
+		f[q] = grid[offset + q * stride];
+		int q2 = q * q;
+		do {
+			int r = v[k];
+			s = (f[q] - f[r] + (double) (q2 - r * r)) / (q - r) / 2.0;
+		} while (s <= z[k] && --k > -1);
 
-    for (u32 q = 1, k = 0, s = 0; q < length; q++) {
-        f[q] = grid[offset + q * stride];
-        u32 q2 = q * q;
-        do {
-            u32 r = v[k];
-            s = (f[q] - f[r] + q2 - r * r) / (q - r) / 2;
-        } while (s <= z[k] && --k > -1);
+		k++;
+		v[k] = q;
+		z[k] = s;
+		z[k + 1] = INF;
+	}
 
-        k++;
-        v[k] = q;
-        z[k] = s;
-        z[k + 1] = INF;
-    }
-
-    for (u32 q = 0, k = 0; q < length; q++) {
-        while (z[k + 1] < q) k++;
-        u32 r = v[k];
-        u32 qr = q - r;
-        grid[offset + q * stride] = f[r] + qr * qr;
-    }
+	for (int q = 0, k = 0; q < length; q++) {
+		while (z[k + 1] < q) k++;
+		int r = v[k];
+		double qr = q - r;
+		grid[offset + q * stride] = f[r] + qr * qr;
+	}
 }
 static inline void edt(double* data, u32 x0, u32 y0, u32 width, u32 height, u32 gridSize) {
-    for (u32 x = x0; x < x0 + width; x++)
-			edt1d(data, y0 * gridSize + x, gridSize, height);
-			
-    for (u32 y = y0; y < y0 + height; y++)
-			edt1d(data, y * gridSize + x0, 1, width);
+	for (u32 x = x0; x < x0 + width; x++)
+		edt1d(data, y0 * gridSize + x, gridSize, height);
+		
+	for (u32 y = y0; y < y0 + height; y++)
+		edt1d(data, y * gridSize + x0, 1, width);
 }
 
 TEST("Load a font") {
@@ -108,13 +109,16 @@ TEST("Load a font") {
 	if(!ft) FT_Init_FreeType(&ft);
 
 	// Loads the new face in using the library
-	if(FT_New_Face(ft, "C:\\Windows\\Fonts\\msjhl.ttc", 0, (FT_Face*) &face)) printf("ooooop couldn't load font");
+	// if(FT_New_Face(ft, "C:\\Windows\\Fonts\\msyhl.ttc", 1, (FT_Face*) &face)) printf("ooooop couldn't load font");
+	if(FT_New_Face(ft, "roboto.ttf", 0, (FT_Face*) &face)) printf("ooooop couldn't load font");
 	FT_Set_Pixel_Sizes(face, 0, GFX_FONT_START_SIZE);
 }
 
 TEST("Load a") {
+
 	// 泽
-	FT_ULong c = 0x6CFD;
+	// FT_ULong c = 0x6CFD;
+	FT_ULong c = 'T';
 	
 	FT_Load_Char(face, c, FT_LOAD_RENDER);
 
@@ -122,15 +126,12 @@ TEST("Load a") {
 	int width = face->glyph->bitmap.width;
 	int height = face->glyph->bitmap.rows;
 
-	tex.size = (gfx_vector) { width, height };
-	tex.tex = malloc(tex.size.w * tex.size.h * sizeof(u8));
-
 	// Writes the character's pixels to the atlas buffer.
 	int x = 0, y = 0;
 	int w = width, h = height;
 	u8* t = tex.tex + x + y * tex.size.w;
-	for(int i = 0; i < h; i ++)
-		memcpy(t + i * tex.size.w, face->glyph->bitmap.buffer + i * w, w);
+	// for(int i = 0; i < h; i ++)
+	// 	memcpy(t + i * tex.size.w, face->glyph->bitmap.buffer + i * w, w);
 
 	u32 bufwidth = width + 2 * BUFFER;
 	u32 bufheight = height + 2 * BUFFER;
@@ -156,13 +157,12 @@ TEST("Load a") {
 			u32 j = (y + BUFFER) * bufwidth + x + BUFFER;
 
 			if (a == 255) { // fully drawn pixels
-				gridOuter[j] = 0;
+				gridOuter[j] = 0.0;
 				gridInner[j] = INF;
-
 			} else { // aliased pixels
-				double d = 0.5 - (double) a / 255;
-				gridOuter[j] = d > 0 ? d * d : 0;
-				gridInner[j] = d < 0 ? d * d : 0;
+				double d = 0.5 - ((double) a / 255.0);
+				gridOuter[j] = d > 0.0 ? d * d : 0.0;
+				gridInner[j] = d < 0.0 ? d * d : 0.0;
 			}
 		}
 	}
@@ -170,20 +170,22 @@ TEST("Load a") {
 	edt(gridOuter, 0, 0, bufwidth, bufheight, bufwidth);
 	edt(gridInner, BUFFER, BUFFER, width, height, bufwidth);
 
-	for(int i = 0; i < sizeof(f) / sizeof(f[0]); i ++) printf("%d: %.2f, ", i, f[i]);
-	
 	for (u32 i = 0; i < len; i++) {
 		double d = sqrt(gridOuter[i]) - sqrt(gridInner[i]);
-		data[i] = 255.0 - 255.0 * (d / RADIUS + CUTOFF);
+		double res = round(255.0 - 255.0 * (d / RADIUS + CUTOFF));
+		if(res > 255.0) data[i] = 255;
+		else if (res < 0.0) data[i] = 0;
+		else data[i] = res;
+		// printf("%d(%d, %d): %f (%f, %f) -> %d (%f)\n", i, i % bufwidth, i / bufwidth, d, gridOuter[i], gridInner[i], data[i], 255.0 * (d / RADIUS + CUTOFF));
 	}
 
-	stbi_write_png("bitmap1.png", tex.size.w, tex.size.h, 1, tex.tex, tex.size.w);
+	// stbi_write_png("bitmap1.png", tex.size.w, tex.size.h, 1, tex.tex, tex.size.w);
 	tex.tex = data;
 	tex.size = (gfx_vector) { bufwidth, bufheight };
-	stbi_write_png("bitmap2.png", tex.size.w, tex.size.h, 1, tex.tex, tex.size.w);
 }
 
 TEST("Write bitmap to disk") {
+	stbi_write_png("bitmap2.png", tex.size.w, tex.size.h, 1, tex.tex, tex.size.w);
 }
 
 #include "tests_end.h"

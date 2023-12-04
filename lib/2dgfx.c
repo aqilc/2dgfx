@@ -52,6 +52,17 @@
 #define GFX_STR_MACRO(...) GFX_STR(__VA_ARGS__)
 #define GLSL(...) "#version 330 core\n" #__VA_ARGS__
 
+
+// Text rendering macros
+#define GFX_FONT_ATLAS_START_SIZE 256
+#define RENDERING_FONT_SIZE(...) 48##__VA_ARGS__
+
+#define BUFFER (RENDERING_FONT_SIZE() / 8)
+#define FONTBUFSIZE (RENDERING_FONT_SIZE() + BUFFER * 4)
+#define INF 1e20
+#define RADIUS (RENDERING_FONT_SIZE(.0) / 3.0)
+#define CUTOFF 0.25
+
 typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
@@ -112,7 +123,7 @@ typedef struct gfx_char {
 } gfx_char;
 
 typedef enum gfx_texture_type {
-	GL_TEX_IMAGE, GFX_TEX_TYPEFACE, GFX_TEX_PIXELART
+	GFX_TEX_IMAGE, GFX_TEX_TYPEFACE, GFX_TEX_PIXELART
 } gfx_texture_type;
 
 typedef struct gfx_texture {
@@ -244,7 +255,8 @@ static struct {
 		uniform int u_shape;
 
 		vec4 text;
-		float alpha;
+		float a1;
+		float a2;
 
 		void main() {
 			
@@ -253,10 +265,16 @@ static struct {
 					color = v_col; // Shape rendering
 					return;
 				}
-				alpha = texture(u_tex, v_uv).r;
-				if(alpha > 0.5)
-					color = vec4(alpha * v_col.rgba); // Text rendering
-				else color = vec4(0.0);
+				a1 = texture(u_tex, v_uv).r;
+				// if(a1 > .75)
+				// 	a2 = 1.0;
+				// else a2 = 0.0;
+				float dist = .75 - a1;
+				vec2 ddist = vec2(dFdx(dist), dFdy(dist));
+				float pixeldist = dist / length(ddist);
+				a2 = clamp(0.5 - pixeldist, 0.0, 1.0);
+				// alpha = smoothstep(0.75 - .02, 0.75 + .02, texture(u_tex, v_uv).r);
+				color = vec4(v_col.rgb, a2 * v_col.a); // Text rendering
 			}
 			else {
 				text = texture(u_tex, v_uv);
@@ -412,6 +430,47 @@ static struct gfx_atlas_node* gfx_atlas_insert(struct gfx_typeface* face, u32 pa
 	return firstchildins ? firstchildins : gfx_atlas_insert(face, prnt->child[1], size);
 }
 
+// --------------------------------- Euclidean Distance Functions ---------------------------------
+
+double f[FONTBUFSIZE] = {};
+double z[FONTBUFSIZE + 1] = {};
+int v[FONTBUFSIZE] = {};
+static inline void edt1d(double* grid, u32 offset, u32 stride, u32 length) {
+	v[0] = 0;
+	z[0] = -INF;
+	z[1] = INF;
+	f[0] = grid[offset];
+	
+	double s = 0;
+	for (int q = 1, k = 0; q < length; q++) {
+		f[q] = grid[offset + q * stride];
+		int q2 = q * q;
+		do {
+			int r = v[k];
+			s = (f[q] - f[r] + q2 - r * r) / (q - r) / 2;
+		} while (s <= z[k] && --k > -1);
+
+		k++;
+		v[k] = q;
+		z[k] = s;
+		z[k + 1] = INF;
+	}
+
+	for (int q = 0, k = 0; q < length; q++) {
+		while (z[k + 1] < q) k++;
+		int r = v[k];
+		double qr = q - r;
+		grid[offset + q * stride] = f[r] + qr * qr;
+	}
+}
+static inline void edt(double* data, u32 x0, u32 y0, u32 width, u32 height, u32 gridSize) {
+	for (u32 x = x0; x < x0 + width; x++)
+		edt1d(data, y0 * gridSize + x, gridSize, height);
+		
+	for (u32 y = y0; y < y0 + height; y++)
+		edt1d(data, y * gridSize + x0, 1, width);
+}
+
 // ------------------------------------------ Util Funcs ------------------------------------------
 
 size_t gfx_read(char* file, char** (*buf)) {
@@ -446,16 +505,16 @@ u8* gfx_readtoimg(char* file, int* width, int* height) {
 // ------------------------- OpenGL Helper Functions that Rely on Context -------------------------
 
 // Gets the location from cache or sets it in cache
-GLint glULoc(char* name) {
+GLint gfx_uloc(char* name) {
 	GLint* v = hgets(ctx->gl.uniforms, name);
 	if(v == NULL) return hsets(ctx->gl.uniforms, name) = glGetUniformLocation(ctx->gl.progid, name);
 	return *v;
 }
 
-void glUSetm4(char* name, mat4x4 p) { glUniformMatrix4fv(glULoc(name), 1, GL_FALSE, (const GLfloat*) p); }
-void glUSeti(char* name, unsigned int p) { glUniform1i(glULoc(name), p); }
-void glUSet3f(char* name, vec3 p) { glUniform3f(glULoc(name), p[0], p[1], p[2]); }
-void glUSet2f(char* name, vec2 p) { glUniform2f(glULoc(name), p[0], p[1]); }
+void gfx_usetm4(char* name, mat4x4 p) { glUniformMatrix4fv(gfx_uloc(name), 1, GL_FALSE, (const GLfloat*) p); }
+void gfx_useti(char* name, unsigned int p) { glUniform1i(gfx_uloc(name), p); }
+void gfx_uset3f(char* name, vec3 p) { glUniform3f(gfx_uloc(name), p[0], p[1], p[2]); }
+void gfx_uset2f(char* name, vec2 p) { glUniform2f(gfx_uloc(name), p[0], p[1]); }
 
 // --------------------------------------- Input Functions ---------------------------------------
 
@@ -469,7 +528,7 @@ gfx_vector gfx_mouse() {
 void gfx_updatescreencoords(int w, int h) {	
 	mat4x4_identity(ctx->transform.screen);
 	mat4x4_ortho(ctx->transform.screen, .0f, (f32) w, (f32) h, .0f, 1.0f, -1.f);
-	glUSetm4("u_mvp", ctx->transform.screen);
+	gfx_usetm4("u_mvp", ctx->transform.screen);
 }
 
 void gfx_mousebuttoncallback(GLFWwindow* window, int button, int action, int mods) {
@@ -727,7 +786,7 @@ static inline u32 findslot() {
 static inline void gfx_setcurtex(img tex) {
 	ctx->textures[tex].uses++;
 	if(ctx->gl.curtex == ctx->textures[tex].slot) return;
-	glUSeti("u_tex", ctx->textures[tex].slot);
+	gfx_useti("u_tex", ctx->textures[tex].slot);
 	ctx->gl.curtex = ctx->textures[tex].slot;
 }
 
@@ -741,11 +800,15 @@ static inline void gfx_texupload(img tex) {
 	
 	gfx_texture* t = ctx->textures + tex;
 	gfx_texture_type type = t->type;
+	
 	GLenum format;
-
-	if(type == GFX_TEX_TYPEFACE)
-		glPixelStorei(GL_UNPACK_ALIGNMENT, 1), format = GL_RED;
-	else glPixelStorei(GL_UNPACK_ALIGNMENT, 4), format = GL_RGBA;
+	if(type == GFX_TEX_TYPEFACE){
+		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+		format = GL_RED;
+	} else {
+		glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+		format = GL_RGBA;
+	}
 	
 	// Generates and binds the texture
 	glGenTextures(1, &t->id);
@@ -762,7 +825,7 @@ static inline void gfx_texupload(img tex) {
 	glTexImage2D(GL_TEXTURE_2D, 0, format, t->size.w, t->size.h, 0, format, GL_UNSIGNED_BYTE, t->tex);
 	
 	// We just don't need mipmaps for fonts so we do this for normal images
-	if(type == GL_TEX_IMAGE) {
+	if(type == GFX_TEX_IMAGE) {
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
 		glGenerateMipmap(GL_TEXTURE_2D); // CALL AFTER UPLOAD
 	}
@@ -779,7 +842,7 @@ img gfx_loadimg(char* file) {
 	int width, height;
 	u8* t; CHECK_CALL(!(t = gfx_readtoimg(file, &width, &height)), return -1, "Couldn't load image '%s'", file);
 	info("Loaded image '%s' (%dx%d)", file, width, height);
-	return gfx_inittex(t, width, height, GL_TEX_IMAGE);
+	return gfx_inittex(t, width, height, GFX_TEX_IMAGE);
 }
 
 
@@ -787,7 +850,7 @@ void image(img img, int x, int y, int w, int h) {
 	if(img < 0) return;
 	
 	// Sets up the environment
-	// if(vlen(ctx->drawbuf.shp)) glUSeti("u_shape", SHAPE), draw(&ctx->drawbuf, vlen(ctx->drawbuf.shp), vlen(ctx->drawbuf.idx));
+	// if(vlen(ctx->drawbuf.shp)) gfx_useti("u_shape", SHAPE), draw(&ctx->drawbuf, vlen(ctx->drawbuf.shp), vlen(ctx->drawbuf.idx));
 	if(!ctx->textures[img].id) gfx_texupload(img);
 	else if(ctx->textures[img].slot < 0) gfx_activetex(img);
 	gfx_setcurtex(img);
@@ -804,7 +867,7 @@ void image(img img, int x, int y, int w, int h) {
 		.lastsize = ctx->drawbuf.lastsize
 	};
 	
-	glUSeti("u_shape", 2);
+	gfx_useti("u_shape", 2);
 	draw(&d, 4, 6);
 }
 
@@ -850,35 +913,32 @@ static inline FT_ULong gfx_readutf8(u8** str) {
 }
 
 
-#define GFX_FONT_ATLAS_START_SIZE 128
-#define RENDERING_FONT_SIZE(...) 24##__VA_ARGS__
+double gridOuter[FONTBUFSIZE * FONTBUFSIZE] = {};
+double gridInner[FONTBUFSIZE * FONTBUFSIZE] = {};
 
 static gfx_char* gfx_loadfontchar(typeface tf, FT_ULong c) {
 	gfx_typeface* face = ctx->fonts.store + tf;
 	gfx_texture* tex = ctx->textures + face->tex;
+	CHECK_CALL(FT_Load_Char(((FT_Face) face->face), c, FT_LOAD_RENDER), return NULL, "Couldn't load char '%c' (%X)", c, c);
 
-	FT_Error e;
-	// CHECK_CALL((e = FT_Set_Pixel_Sizes(((FT_Face) face->face), 0, RENDERING_FONT_SIZE())), return NULL, "Couldn't set size (Error %d)", e);
-	CHECK_CALL((e = FT_Load_Char(((FT_Face) face->face), c, FT_LOAD_RENDER)), return NULL, "Couldn't load char '%c' (%X) (Error %d)", c, c, e);
-	// CHECK_CALL((e = FT_Set_Pixel_Sizes(((FT_Face) face->face), 0, 200)), return NULL, "Couldn't set size (Error %d)", e);
-	CHECK_CALL((e = FT_Render_Glyph(((FT_Face) face->face)->glyph, FT_RENDER_MODE_SDF)), return NULL, "Couldn't render char '%c' (%X) (Error %d)", c, c, e);
-
-	int width = ((FT_Face) face->face)->glyph->bitmap.width;
-	int height = ((FT_Face) face->face)->glyph->bitmap.rows;
-	gfx_vector size = { width, height };
+	u32 width = ((FT_Face) face->face)->glyph->bitmap.width;
+	u32 height = ((FT_Face) face->face)->glyph->bitmap.rows;
+	u32 bufwidth = width + 2 * BUFFER;
+	u32 bufheight = height + 2 * BUFFER;
 
 	// Tries to add the character, resizing the whole texture until it's done
 	struct gfx_atlas_node* maybe;
-	int growth = 1;
+	gfx_vector size = { bufwidth, bufheight };
+	u32 growth = 1;
 	while(!(maybe = gfx_atlas_insert(face, 0, &size))) {
-		info("Atlas size doubled for font '%s'", face->name);
+		printf("Atlas size doubled for font '%s'", face->name);
 		growth *= 2, tex->size.w *= 2, tex->size.h *= 2;
 	}
 
 	if(!tex->tex)
-		tex->tex = calloc(1, tex->size.w * tex->size.h * sizeof(u8)); // CHANGE BACK TO MALLOC WHEN POSSIBLE
+		tex->tex = malloc(tex->size.w * tex->size.h * sizeof(u8));
 	else if(growth > 1) {
-		int ow = tex->size.w / growth, oh = tex->size.h / growth;
+		u32 ow = tex->size.w / growth, oh = tex->size.h / growth;
 		u8* ntex = malloc(tex->size.w * tex->size.h * sizeof(u8));
 		u8* otex = tex->tex;
 		
@@ -888,16 +948,49 @@ static gfx_char* gfx_loadfontchar(typeface tf, FT_ULong c) {
 		tex->tex = ntex;
 		free(otex);
 	}
+	
+	u32 len = bufwidth * bufheight;
 
-	// Writes the character's pixels to the atlas buffer.
+	// Initialize grids outside the glyph range to alpha 0
+	for(u32 i = 0; i < len; i ++)
+		gridOuter[i] = INF;
+	memset(gridInner, 0, sizeof(gridInner));
+	memset(f, 0, sizeof(f));
+	memset(z, 0, sizeof(z));
+	memset(v, 0, sizeof(v));
+
+	for (u32 y = 0; y < height; y++) {
+		for (u32 x = 0; x < width; x++) {
+			u8 a = ((FT_Face) face->face)->glyph->bitmap.buffer[y * width + x]; // alpha value
+			if (a == 0) continue; // empty pixels
+
+			u32 j = (y + BUFFER) * bufwidth + x + BUFFER;
+
+			if (a == 255) { // fully drawn pixels
+				gridOuter[j] = 0.0;
+				gridInner[j] = INF;
+			} else { // aliased pixels
+				double d = 0.5 - ((double) a / 255.0);
+				gridOuter[j] = d > 0.0 ? d * d : 0.0;
+				gridInner[j] = d < 0.0 ? d * d : 0.0;
+			}
+		}
+	}
+
+	edt(gridOuter, 0, 0, bufwidth, bufheight, bufwidth);
+	edt(gridInner, BUFFER, BUFFER, width, height, bufwidth);
+
 	int x = maybe->p.x, y = maybe->p.y;
-	int w = size.w,     h = size.h;
-	u8* t = tex->tex + x + y * tex->size.w;
-	for(int i = 0; i < h; i ++)
-		memcpy(t + i * tex->size.w, ((FT_Face) face->face)->glyph->bitmap.buffer + i * w, w);
-
+	int tw = tex->size.w, th = tex->size.h;
+	u8* letter = tex->tex + x + y * tw;
+	for (u32 i = 0; i < len; i++) {
+		double res = 255.0 - 255.0 * ((sqrt(gridOuter[i]) - sqrt(gridInner[i])) / RADIUS + CUTOFF);
+		if(res >= 255.0) letter[i % bufwidth + (i / bufwidth) * tw] = 255;
+		else if (res <= 0.0) letter[i % bufwidth + (i / bufwidth) * tw] = 0;
+		else letter[i % bufwidth + (i / bufwidth) * tw] = res;
+	}
+	
 	face->added = true;
-	sizeof(**(face->chars).keys);
 	hset(face->chars, c) = (gfx_char) {
 		.c = c,
 		.size = size,
@@ -965,7 +1058,7 @@ static inline void drawtext() {
 	gfx_setcurtex(face->tex);
 
 draw:
-	glUSeti("u_shape", TEXT);
+	gfx_useti("u_shape", TEXT);
 	draw(&ctx->drawbuf, vlen(ctx->drawbuf.shp), vlen(ctx->drawbuf.idx));
 }
 void font(typeface face, u32 size) {
