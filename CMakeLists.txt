@@ -88,3 +88,12 @@ add_executable(graphics
 
 target_link_libraries(graphics PRIVATE glfw freetype libglew_static stb_image)
 
+add_custom_command(TARGET graphics POST_BUILD        # Adds a post-build event to MyTest
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different  # which executes "cmake - E copy_if_different..."
+        "${PROJECT_SOURCE_DIR}/roboto.ttf"      # <--this is in-file
+        $<TARGET_FILE_DIR:graphics>)
+
+add_custom_command(TARGET graphics POST_BUILD        # Adds a post-build event to MyTest
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different  # which executes "cmake - E copy_if_different..."
+        "${PROJECT_SOURCE_DIR}/hyperAngery.png"      # <--this is in-file
+        $<TARGET_FILE_DIR:graphics>)
