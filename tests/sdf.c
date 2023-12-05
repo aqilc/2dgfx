@@ -1,10 +1,14 @@
 /*
 	SDF Resources:
 		TinySDF(this impl): https://github.com/mapbox/tiny-sdf/blob/main/index.js
+		SDT Dead Reckoning technique: https://github.com/arkanis/single-header-file-c-libs/blob/master/sdt_dead_reckoning.h
+		
 		USES SUBPIXEL + SDF: https://github.com/astiopin/webgl_fonts
 		Using freetype's destructor to render: https://github.com/mapbox/sdf-glyph-foundry/blob/master/include/mapbox/glyph_foundry_impl.hpp
 		SDF after raster: https://github.com/raphm/makeglfont/blob/master/makeglfont.cpp#L214
+		
 		Custom Font rendering solution in a few lines: https://github.com/raphlinus/font-rs/blob/master/src/font.rs
+		
 		https://github.com/Chlumsky/msdfgen/blob/master/core/render-sdf.cpp
 		https://github.com/behdad/glyphy
 		https://stackoverflow.com/questions/25956272/better-quality-text-in-webgl

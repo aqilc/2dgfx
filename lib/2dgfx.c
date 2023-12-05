@@ -1,4 +1,7 @@
 /**
+ * MODERN OPENGL: https://github.com/fendevel/Guide-to-Modern-OpenGL-Functions/blob/master/README.md#glcreatetextures
+ *   - Simplified, faster, less binding.
+ *   - Used like vulkan: https://developer.nvidia.com/opengl-vulkan
  * https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/getting-started-with-windbg#summary-of-commands
  * https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/commands
  * TODO:
@@ -55,13 +58,7 @@
 
 // Text rendering macros
 #define GFX_FONT_ATLAS_START_SIZE 256
-#define RENDERING_FONT_SIZE(...) 48##__VA_ARGS__
-
-#define BUFFER (RENDERING_FONT_SIZE() / 8)
-#define FONTBUFSIZE (RENDERING_FONT_SIZE() + BUFFER * 4)
-#define INF 1e20
-#define RADIUS (RENDERING_FONT_SIZE(.0) / 3.0)
-#define CUTOFF 0.25
+#define RENDERING_FONT_SIZE(...) 96##__VA_ARGS__
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -265,15 +262,10 @@ static struct {
 					color = v_col; // Shape rendering
 					return;
 				}
-				a1 = texture(u_tex, v_uv).r;
-				// if(a1 > .75)
-				// 	a2 = 1.0;
-				// else a2 = 0.0;
-				float dist = .75 - a1;
+				float dist = .5 - texture(u_tex, v_uv).r;
 				vec2 ddist = vec2(dFdx(dist), dFdy(dist));
 				float pixeldist = dist / length(ddist);
 				a2 = clamp(0.5 - pixeldist, 0.0, 1.0);
-				// alpha = smoothstep(0.75 - .02, 0.75 + .02, texture(u_tex, v_uv).r);
 				color = vec4(v_col.rgb, a2 * v_col.a); // Text rendering
 			}
 			else {
@@ -430,45 +422,136 @@ static struct gfx_atlas_node* gfx_atlas_insert(struct gfx_typeface* face, u32 pa
 	return firstchildins ? firstchildins : gfx_atlas_insert(face, prnt->child[1], size);
 }
 
-// --------------------------------- Euclidean Distance Functions ---------------------------------
 
-double f[FONTBUFSIZE] = {};
-double z[FONTBUFSIZE + 1] = {};
-int v[FONTBUFSIZE] = {};
-static inline void edt1d(double* grid, u32 offset, u32 stride, u32 length) {
-	v[0] = 0;
-	z[0] = -INF;
-	z[1] = INF;
-	f[0] = grid[offset];
+
+void sdt_dead_reckoning(unsigned int width, unsigned int height, unsigned char threshold,  const unsigned char* image, float* distance_field) {
+	// The internal buffers have a 1px padding around them so we can avoid border checks in the loops below
+	unsigned int padded_width = width + 2;
+	unsigned int padded_height = height + 2;
 	
-	double s = 0;
-	for (int q = 1, k = 0; q < length; q++) {
-		f[q] = grid[offset + q * stride];
-		int q2 = q * q;
-		do {
-			int r = v[k];
-			s = (f[q] - f[r] + q2 - r * r) / (q - r) / 2;
-		} while (s <= z[k] && --k > -1);
-
-		k++;
-		v[k] = q;
-		z[k] = s;
-		z[k + 1] = INF;
+	// px and py store the corresponding border point for each pixel (just p in the paper, here x and y
+	// are separated into px and py).
+	int* px = (int*)malloc(padded_width * padded_height * sizeof(px[0]));
+	int* py = (int*)malloc(padded_width * padded_height * sizeof(py[0]));
+	float* padded_distance_field = (float*)malloc(padded_width * padded_height * sizeof(padded_distance_field[0]));
+	
+	// Create macros as local shorthands to access the buffers. Push (and later restore) any previous macro definitions so we
+	// don't overwrite any macros of the user. The names are similar to the names used in the paper so you can use the pseudo-code
+	// in the paper as reference.
+	#pragma push_macro("I")
+	#pragma push_macro("D")
+	#pragma push_macro("PX")
+	#pragma push_macro("PY")
+	#pragma push_macro("LENGTH")
+	// image is unpadded so x and y are in the range 0..width-1 and 0..height-1
+	#define I(x, y) (image[(x) + (y) * width] > threshold)
+	// The internal buffers are padded x and y are in the range 0..padded_width-1 and 0..padded_height-1
+	#define D(x, y) padded_distance_field[(x) + (y) * (padded_width)]
+	#define PX(x, y) px[(x) + (y) * padded_width]
+	#define PY(x, y) py[(x) + (y) * padded_width]
+	// We use a macro instead of the hypotf() function because it's a major performance boost (~26ms down to ~17ms)
+	#define LENGTH(x, y) sqrtf((x)*(x) + (y)*(y)) * 4
+	
+	// Initialize internal buffers
+	for(unsigned int y = 0; y < padded_height; y++) {
+		for(unsigned int x = 0; x < padded_width; x++) {
+			D(x, y) = INFINITY;
+			PX(x, y) = -1;
+			PY(x, y) = -1;
+		}
 	}
-
-	for (int q = 0, k = 0; q < length; q++) {
-		while (z[k + 1] < q) k++;
-		int r = v[k];
-		double qr = q - r;
-		grid[offset + q * stride] = f[r] + qr * qr;
+	
+	// Initialize immediate interior and exterior elements
+	// We iterate over the unpadded image and skip the outermost pixels of it (because we look 1px into each direction)
+	for(unsigned int y = 1; y < height-2; y++) {
+		for(unsigned int x = 1; x < width-2; x++) {
+			int on_immediate_interior_or_exterior = (
+				I(x-1, y) != I(x, y)  ||  I(x+1, y) != I(x, y)  ||
+				I(x, y-1) != I(x, y)  ||  I(x, y+1) != I(x, y)
+			);
+			if ( I(x, y) && on_immediate_interior_or_exterior ) {
+				// The internal buffers have a 1px padding so we need to add 1 to the coordinates of the unpadded image
+				D(x+1, y+1) = 0;
+				PX(x+1, y+1) = x+1;
+				PY(x+1, y+1) = y+1;
+			}
+		}
 	}
-}
-static inline void edt(double* data, u32 x0, u32 y0, u32 width, u32 height, u32 gridSize) {
-	for (u32 x = x0; x < x0 + width; x++)
-		edt1d(data, y0 * gridSize + x, gridSize, height);
-		
-	for (u32 y = y0; y < y0 + height; y++)
-		edt1d(data, y * gridSize + x0, 1, width);
+	
+	// Horizontal (dx), vertical (dy) and diagonal (dxy) distances between pixels
+	const float dx = 1.0, dy = 1.0, dxy = 1.4142135623730950488 /* sqrtf(2) */;
+	
+	// Perform the first pass
+	// We iterate over the padded internal buffers but skip the outermost pixel because we look 1px into each direction
+	for(unsigned int y = 1; y < padded_height-1; y++) {
+		for(unsigned int x = 1; x < padded_width-1; x++) {
+			if ( D(x-1, y-1) + dxy < D(x, y) ) {
+				PX(x, y) = PX(x-1, y-1);
+				PY(x, y) = PY(x-1, y-1);
+				D(x, y) = LENGTH(x - PX(x, y), y - PY(x, y));
+			}
+			if ( D(x, y-1) + dy < D(x, y) ) {
+				PX(x, y) = PX(x, y-1);
+				PY(x, y) = PY(x, y-1);
+				D(x, y) = LENGTH(x - PX(x, y), y - PY(x, y));
+			}
+			if ( D(x+1, y-1) + dxy < D(x, y) ) {
+				PX(x, y) = PX(x+1, y-1);
+				PY(x, y) = PY(x+1, y-1);
+				D(x, y) = LENGTH(x - PX(x, y), y - PY(x, y));
+			}
+			if ( D(x-1, y) + dx < D(x, y) ) {
+				PX(x, y) = PX(x-1, y);
+				PY(x, y) = PY(x-1, y);
+				D(x, y) = LENGTH(x - PX(x, y), y - PY(x, y));
+			}
+		}
+	}
+	
+	// Perform the final pass
+	for(unsigned int y = padded_height-2; y >= 1; y--) {
+		for(unsigned int x = padded_width-2; x >= 1; x--) {
+			if ( D(x+1, y) + dx < D(x, y) ) {
+				PX(x, y) = PX(x+1, y);
+				PY(x, y) = PY(x+1, y);
+				D(x, y) = LENGTH(x - PX(x, y), y - PY(x, y));
+			}
+			if ( D(x-1, y+1) + dxy < D(x, y) ) {
+				PX(x, y) = PX(x-1, y+1);
+				PY(x, y) = PY(x-1, y+1);
+				D(x, y) = LENGTH(x - PX(x, y), y - PY(x, y));
+			}
+			if ( D(x, y+1) + dy < D(x, y) ) {
+				PX(x, y) = PX(x, y+1);
+				PY(x, y) = PY(x, y+1);
+				D(x, y) = LENGTH(x - PX(x, y), y - PY(x, y));
+			}
+			if ( D(x+1, y+1) + dx < D(x, y) ) {
+				PX(x, y) = PX(x+1, y+1);
+				PY(x, y) = PY(x+1, y+1);
+				D(x, y) = LENGTH(x - PX(x, y), y - PY(x, y));
+			}
+		}
+	}
+	
+	// Set the proper sign for inside and outside and write the result into the output distance field
+	for(unsigned int y = 0; y < height; y++) {
+		for(unsigned int x = 0; x < width; x++) {
+			float sign = I(x, y) ? -1 : 1;
+			distance_field[x + y*width] = D(x+1, y+1) * sign;
+		}
+	}
+	
+	// Restore macros and free internal buffers
+	#pragma pop_macro("I")
+	#pragma pop_macro("D")
+	#pragma pop_macro("PX")
+	#pragma pop_macro("PY")
+	#pragma pop_macro("LENGTH")
+	
+	free(padded_distance_field);
+	free(px);
+	free(py);
 }
 
 // ------------------------------------------ Util Funcs ------------------------------------------
@@ -912,33 +995,27 @@ static inline FT_ULong gfx_readutf8(u8** str) {
 	return code_point;
 }
 
-
-double gridOuter[FONTBUFSIZE * FONTBUFSIZE] = {};
-double gridInner[FONTBUFSIZE * FONTBUFSIZE] = {};
-
 static gfx_char* gfx_loadfontchar(typeface tf, FT_ULong c) {
 	gfx_typeface* face = ctx->fonts.store + tf;
 	gfx_texture* tex = ctx->textures + face->tex;
-	CHECK_CALL(FT_Load_Char(((FT_Face) face->face), c, FT_LOAD_RENDER), return NULL, "Couldn't load char '%c' (%X)", c, c);
-
-	u32 width = ((FT_Face) face->face)->glyph->bitmap.width;
-	u32 height = ((FT_Face) face->face)->glyph->bitmap.rows;
-	u32 bufwidth = width + 2 * BUFFER;
-	u32 bufheight = height + 2 * BUFFER;
+	CHECK_CALL(FT_Load_Char(face->face, c, FT_LOAD_RENDER), return NULL, "Couldn't load char '%c' (%X)", c, c);
+	
+	int width = ((FT_Face) face->face)->glyph->bitmap.width;
+	int height = ((FT_Face) face->face)->glyph->bitmap.rows;
+	gfx_vector size = { width, height };
 
 	// Tries to add the character, resizing the whole texture until it's done
 	struct gfx_atlas_node* maybe;
-	gfx_vector size = { bufwidth, bufheight };
-	u32 growth = 1;
+	int growth = 1;
 	while(!(maybe = gfx_atlas_insert(face, 0, &size))) {
-		printf("Atlas size doubled for font '%s'", face->name);
+		info("Atlas size doubled for font '%s'", face->name);
 		growth *= 2, tex->size.w *= 2, tex->size.h *= 2;
 	}
 
 	if(!tex->tex)
 		tex->tex = malloc(tex->size.w * tex->size.h * sizeof(u8));
 	else if(growth > 1) {
-		u32 ow = tex->size.w / growth, oh = tex->size.h / growth;
+		int ow = tex->size.w / growth, oh = tex->size.h / growth;
 		u8* ntex = malloc(tex->size.w * tex->size.h * sizeof(u8));
 		u8* otex = tex->tex;
 		
@@ -948,48 +1025,20 @@ static gfx_char* gfx_loadfontchar(typeface tf, FT_ULong c) {
 		tex->tex = ntex;
 		free(otex);
 	}
-	
-	u32 len = bufwidth * bufheight;
 
-	// Initialize grids outside the glyph range to alpha 0
-	for(u32 i = 0; i < len; i ++)
-		gridOuter[i] = INF;
-	memset(gridInner, 0, sizeof(gridInner));
-	memset(f, 0, sizeof(f));
-	memset(z, 0, sizeof(z));
-	memset(v, 0, sizeof(v));
-
-	for (u32 y = 0; y < height; y++) {
-		for (u32 x = 0; x < width; x++) {
-			u8 a = ((FT_Face) face->face)->glyph->bitmap.buffer[y * width + x]; // alpha value
-			if (a == 0) continue; // empty pixels
-
-			u32 j = (y + BUFFER) * bufwidth + x + BUFFER;
-
-			if (a == 255) { // fully drawn pixels
-				gridOuter[j] = 0.0;
-				gridInner[j] = INF;
-			} else { // aliased pixels
-				double d = 0.5 - ((double) a / 255.0);
-				gridOuter[j] = d > 0.0 ? d * d : 0.0;
-				gridInner[j] = d < 0.0 ? d * d : 0.0;
-			}
-		}
-	}
-
-	edt(gridOuter, 0, 0, bufwidth, bufheight, bufwidth);
-	edt(gridInner, BUFFER, BUFFER, width, height, bufwidth);
+	float* field = malloc(width * height * sizeof(float));
+	sdt_dead_reckoning(width, height, 16, ((FT_Face) face->face)->glyph->bitmap.buffer, field);
 
 	int x = maybe->p.x, y = maybe->p.y;
 	int tw = tex->size.w, th = tex->size.h;
 	u8* letter = tex->tex + x + y * tw;
-	for (u32 i = 0; i < len; i++) {
-		double res = 255.0 - 255.0 * ((sqrt(gridOuter[i]) - sqrt(gridInner[i])) / RADIUS + CUTOFF);
-		if(res >= 255.0) letter[i % bufwidth + (i / bufwidth) * tw] = 255;
-		else if (res <= 0.0) letter[i % bufwidth + (i / bufwidth) * tw] = 0;
-		else letter[i % bufwidth + (i / bufwidth) * tw] = res;
+	for (u32 i = 0; i < width * height; i++) {
+		float res = 128.f - field[i];
+		if(res >= 255.f) letter[i % width + (i / width) * tw] = 255;
+		else if (res <= 0.f) letter[i % width + (i / width) * tw] = 0;
+		else letter[i % width + (i / width) * tw] = res;
 	}
-	
+
 	face->added = true;
 	hset(face->chars, c) = (gfx_char) {
 		.c = c,
