@@ -1,42 +1,76 @@
 /**
- * MODERN OPENGL: https://github.com/fendevel/Guide-to-Modern-OpenGL-Functions/blob/master/README.md#glcreatetextures
- *   - Simplified, faster, less binding.
- *   - Used like vulkan: https://developer.nvidia.com/opengl-vulkan
- * https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/getting-started-with-windbg#summary-of-commands
- * https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/commands
- * TODO:
- *   - Images
- *     - [-] findslot()
- *       - [ ] Return Least used image when there are no free slots.
- * 	- Text Rendering
- * 		- [x] fontsize()
- * 		- [x] font()
- * 		- [-] text()
- *       - [ ] Fix bugs
- *     - [ ] Glyph based loading and rendering.
- *     - [ ] SDF Based font renderer.
- *     - https://github.com/mightycow/Sluggish/blob/master/code/renderer_gl/main.cpp
- *     - https://steamcdn-a.akamaihd.net/apps/valve/2007/SIGGRAPH2007_AlphaTestedMagnification.pdf
- * 	- Masking
- * 		- Determine API for drawing.
- *     - Dynamically turn on stencil testing
- * 		- https://community.khronos.org/t/texture-environment/39767/4
+	MODERN OPENGL: https://github.com/fendevel/Guide-to-Modern-OpenGL-Functions/blob/master/README.md#glcreatetextures
+		- Simplified, faster, less binding.
+		- Cannot support OpenGL ES, requires 4.5-4.6.
+		- Used like vulkan: https://developer.nvidia.com/opengl-vulkan
+		
+	DEBUGGING RESOURCES:
+	- https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/getting-started-with-windbg#summary-of-commands
+	- https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/commands
+	
+	TODO:
+		Next: Global Text Atlas
+		Bugs:
+			- [ ] While lines when rendering text.
+		- Depth Buffer
+			- Z COORDINATES FOR EVERYTHING SO IT'S ORDERED
+		- Multithreading capabilities -> multiple windows.
+			- gfx_window()
+		- Clipping
+			- [ ] push()
+			- [ ] clip(x, y, w, h)
+			- Ideas:
+				- I might just be checking if points are going out of the current rectangle and change them to be inside.
+					push() would have to start its own draw buffer for that, and there would be a need to handle buffer heirarchy and state for them.
+				- Stencil buffer usage somehow. Might be much more expensive for overall output, but a large benefit when there are a lot of objects.
+				- Integrate clipping regions into every drawing function. This would prevent things outside the screen getting drawn completely.
+		- Images
+			- [-] findslot()
+				- [ ] Return Least used image when there are no free slots.
+			- [-] image(img, x, y, w, h)
+				- [x] Main functionality
+				- [ ] Rendering vector graphics with image by using special IDs for them.
+			- [x] gfx_loadimg(char*)
+			- Spritesheets
+				- [ ] sprites spritesheet(img)
+				- [ ] sprite  sprite(sprites, x, y, w, h)
+				- [ ] spritegrid spritegrid(sprites, swidth, sheight, columns, )
+		- Vector Graphics:
+			- [ ] path(&cmds array)
+				- [ ] cmds: { MOVE, x, y }, { CUBIC, x, y, x2, y2 }, { LINE, x, y }
+				- Internal function: gfx_drawpath(path, width, height)
+			- [ ] `image()` integration.
+		- Text Rendering
+			- [x] fontsize()
+			- [x] font()
+			- [-] text()
+				- [x] Fix bugs
+				- [ ] EMOJIS!!!
+				- [ ] Subpixel Antialiasing
+					- Shader side if possible
+				- [ ] Dynamic loading of different font sizes and fonts in one combined texture atlas.
+			- [ ] Glyph based loading and rendering.
+			- [ ] Font Fallbacks
+				- gfx_register_fallbacks(int num, { "fallback1", "fallback2" })
+			- Side Projects:
+				- [ ] SDF Based font renderer [IF POSSIBLE, there are way too many drawbacks for it to be an option right NOW].
+				- [ ] Not using Freetype, but rendering fonts natively.
+			- https://github.com/mightycow/Sluggish/blob/master/code/renderer_gl/main.cpp
+			- https://steamcdn-a.akamaihd.net/apps/valve/2007/SIGGRAPH2007_AlphaTestedMagnification.pdf
+		- Masking
+			- Determine API for drawing.
+			- Dynamically turn on stencil testing
+			- https://community.khronos.org/t/texture-environment/39767/4
  */
 
 /*
 	Lessons Learned:
 		- Call glGenerateMipmaps AFTER uploading texture.
-		- Empty slot has to be active and 
+		- Empty slot has to be active for texture upload.
 */
-
-#include "2dgfx.h"
 
 #include <stdint.h>
 #include <stdio.h>
-
-#include <vec.h>
-#include <hash.h>
-#include <linmath.h>
 
 // GLEW, for opengl functions
 #define GLEW_STATIC
@@ -51,14 +85,22 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
 
+#define VEC_H_IMPLEMENTATION
+#include <vec.h>
+#include <hash.h>
+#include <linmath.h>
+
+#include "2dgfx.h"
+
 #define GFX_STR(...) #__VA_ARGS__
 #define GFX_STR_MACRO(...) GFX_STR(__VA_ARGS__)
 #define GLSL(...) "#version 330 core\n" #__VA_ARGS__
 
 
-// Text rendering macros
-#define GFX_FONT_ATLAS_START_SIZE 256
-#define RENDERING_FONT_SIZE(...) 96##__VA_ARGS__
+// Batch rendering macros
+#define GFX_ATLAS_START_SIZE 256
+#define GFX_ATLAS_MAX_SIZE 2048
+#define RENDERING_FONT_SIZE(...) 48##__VA_ARGS__
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -79,7 +121,7 @@ typedef double f64;
 	#define STB_IMAGE_WRITE_IMPLEMENTATION
 	#include <stb/stb_image_write.h>
 	
-	static inline void error_(const char* line, const char* file, const char* err, ...) {
+	static void error_(const char* line, const char* file, const char* err, ...) {
 		va_list args;
 		va_start(args, err);
 		vprintf(err, args);
@@ -91,6 +133,7 @@ typedef double f64;
 	#define info(...)  error_(GFX_STR_MACRO(__LINE__), __FILE__, "           2DGFX Log: " __VA_ARGS__)
 
 	#define CHECK_CALL(call, errorfn, ...) if(call) { error(__VA_ARGS__); errorfn; }
+	#define DEBUG_MODE(...) __VA_ARGS__;
 	
 	void GLAPIENTRY glDebugMessageHandler(GLenum source,
 			GLenum type, GLuint id, GLenum severity, GLsizei length,
@@ -106,108 +149,138 @@ typedef double f64;
 	#define info(...) 
 	#define CHECK_CALL(call, errorfn, ...) if(call) { errorfn; }
 	#define stbi_write_png(...) 
+	#define DEBUG_MODE(...) 
 #endif
 
 
 // -------------------------------------- Struct definitions --------------------------------------
 
-typedef struct gfx_char {
-  gfx_vector place;   // Place in texture atlas
-  gfx_vector size;    // w, h of char texture
-  gfx_vector bearing; // Refer to freetype docs on this, but I need to keep in track of it.
-  uint32_t advance;   // How far this character moves forward the text cursor
-  unsigned long c;    // The character(unicode)
-} gfx_char;
+typedef struct gfx_texture       gfx_texture;
+typedef struct gfx_texture_atlas gfx_texture_atlas;
+typedef struct gfx_atlas_node    gfx_atlas_node;
+typedef struct gfx_typeface      gfx_typeface;
+typedef struct gfx_drawbuf       gfx_drawbuf;
+typedef struct gfx_vertexbuf     gfx_vertexbuf;
+typedef struct gfx_gl_texture    gfx_gl_texture;
+typedef struct gfx_char          gfx_char;
+typedef struct gfx_char_ident    gfx_char_ident;
 
-typedef enum gfx_texture_type {
-	GFX_TEX_IMAGE, GFX_TEX_TYPEFACE, GFX_TEX_PIXELART
-} gfx_texture_type;
-
-typedef struct gfx_texture {
-  uint8_t* tex;    // Pointer to texture's data buffer (RGBA)
-  gfx_vector size;
-  GLuint id;
-  GLuint slot;
-  uint32_t uses;   // Uses per frame
-  gfx_texture_type type;
-} gfx_texture;
-
-struct gfx_atlas_node {
-  gfx_vector p; // Place
-  gfx_vector s; // Size
-  int child[2];
-  bool filled;
+struct gfx_char {
+	gfx_vector place;   // Place in texture atlas
+	gfx_vector size;    // w, h of char texture
+	gfx_vector bearing; // Refer to freetype docs on this, but I need to keep in track of it.
+	u32 advance;        // How far this character moves forward the text cursor
+	u32 atlas;          // Index of the atlas the character is located in
+	u32 layer;          // Layer of the texture array that the character resides in
+	unsigned long c;    // The character(unicode)
 };
 
-typedef struct gfx_typeface {
-  char* name;
-  uint32_t space_width;
-  uint32_t tex;                      // Texture atlas
-  struct gfx_atlas_node* atlas_tree; // Vec<gfx_atlas_node>
-  void* face;                        // FT_Face internally
-  bool added;
-  ht(unsigned long, gfx_char) chars;
-} gfx_typeface;
+struct gfx_char_ident {
+	FT_ULong c;
+	u32 size;
+};
+
+struct gfx_drawbuf {
+	struct gfx_vertexbuf {
+		vec2 p;
+		float z;
+		vec2 tp;
+		float index;
+		vec4 col;
+	}* shp;
+	u32* idx;
+};
+
+/**
+	Way drawing is done:
+		- Goal: Reduce draw calls and state changes
+		- Current method:
+			- Push vertices onto a draw buffer per texture.
+			- Sequentially draw textures/texture arrays
+*/
 
 
 struct gfx_ctx {
-  GLFWwindow* window;
-  vec4 curcol;            // Current color
-  uint32_t slots;         // Array of length 32 of booleans for slots(OpenGL only supports 32).
-  float z;                // Current "z-index"
-  gfx_texture* textures;  // Vec<gfx_texture>
-  
-  // OpenGL related variables.
-  struct {
-    GLuint progid, varrid, vbufid, idxbufid;
-    GLuint curtex;
-    ht(char*, GLint) uniforms;
-  } gl;
+	GLFWwindow* window; // GLFW Window
+	vec4 curcol;        // Current color
+	u32 slots;          // Array of length 32 of booleans for slots(OpenGL only supports 32).
+	float z;            // Current "z-index"
+	
+	struct gfx_texture_atlas {
+		bool added;
+		u32 gltex;
+		u32 layers;
+		gfx_vector size;
+		struct gfx_atlas_node {
+			gfx_vector p; // Place
+			gfx_vector s; // Size
+			u32 child[2];
+			bool filled;
+		}** atlas_trees; // Array of trees, one tree per layer
+	}* atlases;
+	
+	struct gfx_texture {
+		u32 gltex;
+		gfx_vector size;
+	}* textures;
 
-  struct {
-    gfx_typeface* store;
-    uint32_t cur;
-    uint32_t size;
-    uint32_t lh;
-  } fonts;
+	u32 curdrawbuf;
+	
+	// OpenGL related variables.
+	struct {
+		GLuint progid, varrid, vbufid, idxbufid;
+		GLuint curtex;
+		GLint max_texture_layers;
+		gfx_vector maxdrawbufsize;
+		struct gfx_gl_texture {
+			bool mipmaps;
+			bool pixellated;
+			bool array;
+			GLuint id;
+			GLuint slot;
+			GLenum format;
+			u32 uses;
+			gfx_drawbuf drawbuf;
+			u8* buf;
+		}* gltexes;
+		ht(char*, GLint) uniforms;
+	} gl;
 
-  struct gfx_drawbuf {
-    struct gfx_vertexbuf {
-      vec2 p;
-      float z;
-      vec2 tp;
-      vec4 col;
-    }* shp;
-    uint32_t* idx;
-    gfx_vector lastsize;
-    bool textdrawn;
-  } drawbuf;
+	struct {
+		struct gfx_typeface {
+			char* name;
+			u32 space_width;
+			FT_Face face;
+			ht(gfx_char_ident, gfx_char) chars;
+		}* store;
+		u32 cur, size, lh;
+	} fonts;
 
-  struct {
-    double x, y;
-    struct {
-      double x, y;
-    } press;
-    bool pressed;
-  } mouse;
+	struct {
+		double x, y;
+		struct {
+			double x, y;
+		} press;
+		bool pressed;
+	} mouse;
 
-  struct {
+	struct {
 		double lastfpscalc;
 		double lastfpsnum;
 		double lastfpscount;
-    double start;
-    double delta;
-    double last;
-    double frametime;
-    uint32_t count;
-  } frame;
+		double start;
+		double delta;
+		double last;
+		double frametime;
+		u32 count;
+	} frame;
 
-  struct {
-    mat4x4 screen;
-    mat4x4 cur;
-    bool changed;
-    bool used;        // Calls draw if there were shapes drawn between transforms
-  } transform;
+	struct {
+		mat4x4 screen;
+		mat4x4 cur;
+		bool changed;
+		bool used;        // Calls draw if there were shapes drawn between transforms
+	} transform;
 };
 
 static struct gfx_ctx* ctx = NULL;
@@ -216,7 +289,7 @@ static struct gfx_ctx* ctx = NULL;
 // -------------------------------- OpenGL Helper Functions + Data --------------------------------
 
 enum gfx_drawprim {
-	TEXT = 0, SHAPE = 0, IMAGE = 1
+	TEXT = 0, SHAPE = 0, IMAGE = 1, SDF_TEXT = 3
 };
 
 static struct {
@@ -227,17 +300,20 @@ static struct {
 		precision mediump float;
 		layout (location = 0) in vec4 pos;
 		layout (location = 1) in vec2 uv;
-		layout (location = 2) in vec4 col;
+		layout (location = 2) in float idx;
+		layout (location = 3) in vec4 col;
 
 		uniform mat4 u_mvp;
 
 		out vec2 v_uv;
 		out vec4 v_col;
+		out float v_idx;
 
 		void main() {
 			gl_Position = u_mvp * pos;
 			v_uv = uv;
 			v_col = col;
+			v_idx = idx;
 		}
 	),
 
@@ -256,25 +332,16 @@ static struct {
 		float a2;
 
 		void main() {
-			
-			if(u_shape == 0) {
-				if(v_uv.x < 0) {
-					color = v_col; // Shape rendering
-					return;
-				}
-				float dist = .5 - texture(u_tex, v_uv).r;
-				vec2 ddist = vec2(dFdx(dist), dFdy(dist));
-				float pixeldist = dist / length(ddist);
-				a2 = clamp(0.5 - pixeldist, 0.0, 1.0);
-				color = vec4(v_col.rgb, a2 * v_col.a); // Text rendering
+			if(v_uv.x < 0) {
+				color = v_col; // Shape rendering
+			}
+			else if(u_shape == 0) {
+				color = vec4(v_col.rgb, texture(u_tex, v_uv).r * v_col.a); // Text rendering
 			}
 			else {
 				text = texture(u_tex, v_uv);
 				color = vec4(text.rgb, text.a * v_col.a); // Image rendering
 			}
-			// color = u_shape == 1 ? vec4(text.r * v_col.rgba) : u_shape == 0 ? v_col : vec4(text.rgb, text.a * v_col.a);
-			// color = u_shape ? v_col : text;
-			// color = vec4(1.0, 1.0, 1.0, 1.0);
 		}
 	)
 };
@@ -285,16 +352,20 @@ struct gfx_layoutelement {
 	bool normalized;
 };
 
-static inline u32 gfx_glsizeof(GLenum type) {
+static u32 gfx_glsizeof(GLenum type) {
 	switch(type) {
 		case GL_BYTE:
 		case GL_UNSIGNED_BYTE:
+		case GL_RED:
 			return 1;
+		case GL_RGB:
+		case GL_RGB8:
+			return 3;
 		default: return 4;
 	}
 }
 
-static inline void gfx_applylayout(u32 count, struct gfx_layoutelement* elems) {
+static void gfx_applylayout(u32 count, struct gfx_layoutelement* elems) {
 	size_t offset = 0, stride = 0;
 	for (u32 i = 0; i < count; i ++) stride += elems[i].count * gfx_glsizeof(elems[i].type);
 	for (u32 i = 0; i < count; i ++) {
@@ -355,8 +426,8 @@ static GLuint gfx_shaderprog(const char* vert, const char* frag) {
 // Resizing texture picked up from here: https://straypixels.net/texture-packing-for-fonts/
 // Could use this algorithm with "unused spaces" from here but would require a reimpl: https://github.com/TeamHypersomnia/rectpack2D/
 // gfx_atlas_insert(vnew(), &(struct gfx_atlas_node) { {x, y}, {w, h}, {NULL, NULL}, false }, &(gfx_vector) {w, h})
-static struct gfx_atlas_node* gfx_atlas_insert(struct gfx_typeface* face, u32 parent, gfx_vector* size) {
-	struct gfx_atlas_node* prnt = face->atlas_tree + parent;
+static struct gfx_atlas_node* gfx_atlas_insert(u32 atlas, u32 layer, u32 parent, gfx_vector* size) {
+	gfx_atlas_node* prnt = ctx->atlases[atlas].atlas_trees[layer] + parent;
 
 	// Index 0 is taken up by the root node.
 	if(prnt->child[0] == 0 || prnt->child[1] == 0) {
@@ -372,8 +443,8 @@ static struct gfx_atlas_node* gfx_atlas_insert(struct gfx_typeface* face, u32 pa
 
 		// The real size(against the edges of the texture) of the node
 		gfx_vector realsize = prnt->s;
-		if (prnt->p.x + prnt->s.w == INT_MAX) realsize.w = ctx->textures[face->tex].size.w - prnt->p.x;
-		if (prnt->p.y + prnt->s.h == INT_MAX) realsize.h = ctx->textures[face->tex].size.h - prnt->p.y;
+		if (prnt->p.x + prnt->s.w == INT_MAX) realsize.w = ctx->atlases[atlas].size.w - prnt->p.x;
+		if (prnt->p.y + prnt->s.h == INT_MAX) realsize.h = ctx->atlases[atlas].size.h - prnt->p.y;
 		
 		// If the image doesn't fit in the node
 		if(realsize.x < size->x || realsize.y < size->y) return NULL;
@@ -411,147 +482,15 @@ static struct gfx_atlas_node* gfx_atlas_insert(struct gfx_typeface* face, u32 pa
 		}
 
 		// All heap allocs are confined to this, makes it much easier to free.
-		vpusharr(face->atlas_tree, { c1, c2 }); // THIS MODIFIES THE POINTER SO YOU CANNOT USE PRNT BECAUSE IT USES THE OLD PTR
-		face->atlas_tree[parent].child[0] = vlen(face->atlas_tree) - 2;
-		face->atlas_tree[parent].child[1] = vlen(face->atlas_tree) - 1;
+		vpusharr(ctx->atlases[atlas].atlas_trees[layer], { c1, c2 }); // THIS MODIFIES THE POINTER SO YOU CANNOT USE PRNT BECAUSE IT USES THE OLD PTR
+		ctx->atlases[atlas].atlas_trees[layer][parent].child[0] = vlen(ctx->atlases[atlas].atlas_trees[layer]) - 2;
+		ctx->atlases[atlas].atlas_trees[layer][parent].child[1] = vlen(ctx->atlases[atlas].atlas_trees[layer]) - 1;
 		
-		return gfx_atlas_insert(face, face->atlas_tree[parent].child[0], size);
+		return gfx_atlas_insert(atlas, layer, ctx->atlases[atlas].atlas_trees[layer][parent].child[0], size);
 	}
 
-	struct gfx_atlas_node* firstchildins = gfx_atlas_insert(face, prnt->child[0], size);
-	return firstchildins ? firstchildins : gfx_atlas_insert(face, prnt->child[1], size);
-}
-
-
-
-void sdt_dead_reckoning(unsigned int width, unsigned int height, unsigned char threshold,  const unsigned char* image, float* distance_field) {
-	// The internal buffers have a 1px padding around them so we can avoid border checks in the loops below
-	unsigned int padded_width = width + 2;
-	unsigned int padded_height = height + 2;
-	
-	// px and py store the corresponding border point for each pixel (just p in the paper, here x and y
-	// are separated into px and py).
-	int* px = (int*)malloc(padded_width * padded_height * sizeof(px[0]));
-	int* py = (int*)malloc(padded_width * padded_height * sizeof(py[0]));
-	float* padded_distance_field = (float*)malloc(padded_width * padded_height * sizeof(padded_distance_field[0]));
-	
-	// Create macros as local shorthands to access the buffers. Push (and later restore) any previous macro definitions so we
-	// don't overwrite any macros of the user. The names are similar to the names used in the paper so you can use the pseudo-code
-	// in the paper as reference.
-	#pragma push_macro("I")
-	#pragma push_macro("D")
-	#pragma push_macro("PX")
-	#pragma push_macro("PY")
-	#pragma push_macro("LENGTH")
-	// image is unpadded so x and y are in the range 0..width-1 and 0..height-1
-	#define I(x, y) (image[(x) + (y) * width] > threshold)
-	// The internal buffers are padded x and y are in the range 0..padded_width-1 and 0..padded_height-1
-	#define D(x, y) padded_distance_field[(x) + (y) * (padded_width)]
-	#define PX(x, y) px[(x) + (y) * padded_width]
-	#define PY(x, y) py[(x) + (y) * padded_width]
-	// We use a macro instead of the hypotf() function because it's a major performance boost (~26ms down to ~17ms)
-	#define LENGTH(x, y) sqrtf((x)*(x) + (y)*(y)) * 4
-	
-	// Initialize internal buffers
-	for(unsigned int y = 0; y < padded_height; y++) {
-		for(unsigned int x = 0; x < padded_width; x++) {
-			D(x, y) = INFINITY;
-			PX(x, y) = -1;
-			PY(x, y) = -1;
-		}
-	}
-	
-	// Initialize immediate interior and exterior elements
-	// We iterate over the unpadded image and skip the outermost pixels of it (because we look 1px into each direction)
-	for(unsigned int y = 1; y < height-2; y++) {
-		for(unsigned int x = 1; x < width-2; x++) {
-			int on_immediate_interior_or_exterior = (
-				I(x-1, y) != I(x, y)  ||  I(x+1, y) != I(x, y)  ||
-				I(x, y-1) != I(x, y)  ||  I(x, y+1) != I(x, y)
-			);
-			if ( I(x, y) && on_immediate_interior_or_exterior ) {
-				// The internal buffers have a 1px padding so we need to add 1 to the coordinates of the unpadded image
-				D(x+1, y+1) = 0;
-				PX(x+1, y+1) = x+1;
-				PY(x+1, y+1) = y+1;
-			}
-		}
-	}
-	
-	// Horizontal (dx), vertical (dy) and diagonal (dxy) distances between pixels
-	const float dx = 1.0, dy = 1.0, dxy = 1.4142135623730950488 /* sqrtf(2) */;
-	
-	// Perform the first pass
-	// We iterate over the padded internal buffers but skip the outermost pixel because we look 1px into each direction
-	for(unsigned int y = 1; y < padded_height-1; y++) {
-		for(unsigned int x = 1; x < padded_width-1; x++) {
-			if ( D(x-1, y-1) + dxy < D(x, y) ) {
-				PX(x, y) = PX(x-1, y-1);
-				PY(x, y) = PY(x-1, y-1);
-				D(x, y) = LENGTH(x - PX(x, y), y - PY(x, y));
-			}
-			if ( D(x, y-1) + dy < D(x, y) ) {
-				PX(x, y) = PX(x, y-1);
-				PY(x, y) = PY(x, y-1);
-				D(x, y) = LENGTH(x - PX(x, y), y - PY(x, y));
-			}
-			if ( D(x+1, y-1) + dxy < D(x, y) ) {
-				PX(x, y) = PX(x+1, y-1);
-				PY(x, y) = PY(x+1, y-1);
-				D(x, y) = LENGTH(x - PX(x, y), y - PY(x, y));
-			}
-			if ( D(x-1, y) + dx < D(x, y) ) {
-				PX(x, y) = PX(x-1, y);
-				PY(x, y) = PY(x-1, y);
-				D(x, y) = LENGTH(x - PX(x, y), y - PY(x, y));
-			}
-		}
-	}
-	
-	// Perform the final pass
-	for(unsigned int y = padded_height-2; y >= 1; y--) {
-		for(unsigned int x = padded_width-2; x >= 1; x--) {
-			if ( D(x+1, y) + dx < D(x, y) ) {
-				PX(x, y) = PX(x+1, y);
-				PY(x, y) = PY(x+1, y);
-				D(x, y) = LENGTH(x - PX(x, y), y - PY(x, y));
-			}
-			if ( D(x-1, y+1) + dxy < D(x, y) ) {
-				PX(x, y) = PX(x-1, y+1);
-				PY(x, y) = PY(x-1, y+1);
-				D(x, y) = LENGTH(x - PX(x, y), y - PY(x, y));
-			}
-			if ( D(x, y+1) + dy < D(x, y) ) {
-				PX(x, y) = PX(x, y+1);
-				PY(x, y) = PY(x, y+1);
-				D(x, y) = LENGTH(x - PX(x, y), y - PY(x, y));
-			}
-			if ( D(x+1, y+1) + dx < D(x, y) ) {
-				PX(x, y) = PX(x+1, y+1);
-				PY(x, y) = PY(x+1, y+1);
-				D(x, y) = LENGTH(x - PX(x, y), y - PY(x, y));
-			}
-		}
-	}
-	
-	// Set the proper sign for inside and outside and write the result into the output distance field
-	for(unsigned int y = 0; y < height; y++) {
-		for(unsigned int x = 0; x < width; x++) {
-			float sign = I(x, y) ? -1 : 1;
-			distance_field[x + y*width] = D(x+1, y+1) * sign;
-		}
-	}
-	
-	// Restore macros and free internal buffers
-	#pragma pop_macro("I")
-	#pragma pop_macro("D")
-	#pragma pop_macro("PX")
-	#pragma pop_macro("PY")
-	#pragma pop_macro("LENGTH")
-	
-	free(padded_distance_field);
-	free(px);
-	free(py);
+	struct gfx_atlas_node* firstchildins = gfx_atlas_insert(atlas, layer, prnt->child[0], size);
+	return firstchildins ? firstchildins : gfx_atlas_insert(atlas, layer, prnt->child[1], size);
 }
 
 // ------------------------------------------ Util Funcs ------------------------------------------
@@ -585,7 +524,7 @@ u8* gfx_readtoimg(char* file, int* width, int* height) {
 	return stbi_load(file, width, height, &channels, STBI_rgb_alpha);
 }
 
-// ------------------------- OpenGL Helper Functions that Rely on Context -------------------------
+// ---------------------------------- OpenGL Uniforms Functions ----------------------------------
 
 // Gets the location from cache or sets it in cache
 GLint gfx_uloc(char* name) {
@@ -636,8 +575,11 @@ void gfx_framebuffersizecallback(GLFWwindow* window, int width, int height) {
 	gfx_updatescreencoords(width, height);
 }
 
+// ----------------------------------------- GFX Headers -----------------------------------------
 
 
+static u32 gfx_atlas_new(GLenum format);
+static void drawtext();
 
 // --------------------------------------- Setup Functions ---------------------------------------
 
@@ -652,18 +594,12 @@ void gfx_setctx(struct gfx_ctx* c) {
 
 struct gfx_ctx* gfx_init(const char* title, u32 w, u32 h) {
 	GLFWwindow* window;
-
-	#ifdef GFX_DEBUG
-		glfwSetErrorCallback(glfwErrorHandler);
-	#endif
+	DEBUG_MODE(glfwSetErrorCallback(glfwErrorHandler))
 	
 	// Initializes the library
 	CHECK_CALL(!glfwInit(), return NULL, "Couldn't initialize glfw3.");
 
 	// GLFW hints
-	#ifdef GFX_DEBUG
-		glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
-	#endif
 	// glfwWindowHint(GLFW_DECORATED, GL_FALSE);
 	// glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, GL_TRUE);
 	glfwWindowHint(GLFW_SAMPLES, 4);
@@ -671,6 +607,7 @@ struct gfx_ctx* gfx_init(const char* title, u32 w, u32 h) {
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
 	glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
+	DEBUG_MODE(glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE))
 
 	// Create a windowed mode window and its OpenGL context
 	CHECK_CALL(!(window = glfwCreateWindow(w, h, title, NULL, NULL)),
@@ -690,9 +627,8 @@ struct gfx_ctx* gfx_init(const char* title, u32 w, u32 h) {
 	GLenum err;
 	CHECK_CALL((err = glewInit()), glfwTerminate(); return NULL, "GLEW initialization failed: %s", glewGetErrorString(err));
 
-	#ifdef GFX_DEBUG
-		glDebugMessageCallback(glDebugMessageHandler, NULL);
-	#endif
+	// Debug callback for detecting OpenGL errors
+	DEBUG_MODE(glDebugMessageCallback(glDebugMessageHandler, NULL))
 
 	// Enables OpenGL Features
 	glEnable(GL_MULTISAMPLE);
@@ -706,23 +642,27 @@ struct gfx_ctx* gfx_init(const char* title, u32 w, u32 h) {
 	ctx->gl.progid = gfx_shaderprog(default_shaders.vert, default_shaders.frag);
 	glGenVertexArrays(1, &ctx->gl.varrid);
 	ctx->textures = vnew();
+	ctx->atlases = vnew();
+	ctx->gl.gltexes = vnew();
 	ctx->fonts.store = vnew();
 	ctx->fonts.size = 48;
 	ctx->z = -1.0f;
 	ctx->window = window;
 
+
+	glGetIntegerv(GL_MAX_ARRAY_TEXTURE_LAYERS, &ctx->gl.max_texture_layers);
+	info("Max texture layers allowed: %d", ctx->gl.max_texture_layers);
+
 	// Initializes OpenGL Context
 	gfx_setctx(ctx);
+	
+	// Text atlas
+	gfx_atlas_new(GL_RED);
 	gfx_updatescreencoords(w, h);
 	fill(255, 255, 255, 255);
-
-	// Initializes draw (*buf)fer vertexes
-	ctx->drawbuf.shp = vnew();
-	ctx->drawbuf.idx = vnew();
 	return ctx;
 }
 
-static inline void drawtext();
 bool gfx_nextframe() {
 	glClear(GL_COLOR_BUFFER_BIT);
 	ctx->frame.count ++;
@@ -733,7 +673,7 @@ bool gfx_nextframe() {
 	return !glfwWindowShouldClose(ctx->window);
 }
 void gfx_frameend() {
-	if(vlen(ctx->drawbuf.shp)) drawtext();
+	if(vlen(ctx->gl.gltexes[ctx->curdrawbuf].drawbuf.shp)) drawtext();
 	ctx->z = -1.0f;
 	glfwSwapBuffers(ctx->window);
 	glfwPollEvents();
@@ -742,14 +682,16 @@ void gfx_frameend() {
 void gfx_close() {
 	glfwSetWindowShouldClose(ctx->window, 1);
 }
+
+#define FPS_RECALC_DELTA .1
 bool gfx_fpschanged() {
-	return ctx->frame.start - ctx->frame.lastfpscalc >= .25;
+	return ctx->frame.start - ctx->frame.lastfpscalc >= FPS_RECALC_DELTA;
 }
 
 double gfx_fps() {
 	double rn = ctx->frame.start;
-	if (rn - ctx->frame.lastfpscalc < .25 ||
-	    ctx->frame.count - ctx->frame.lastfpscount == 0) return ctx->frame.lastfpsnum;
+	if (rn - ctx->frame.lastfpscalc < FPS_RECALC_DELTA ||
+		ctx->frame.count - ctx->frame.lastfpscount == 0) return ctx->frame.lastfpsnum;
 	ctx->frame.lastfpsnum = ((double) ctx->frame.count - ctx->frame.lastfpscount) / (rn - ctx->frame.lastfpscalc);
 	ctx->frame.lastfpscount = ctx->frame.count;
 	ctx->frame.lastfpscalc = rn;
@@ -757,10 +699,28 @@ double gfx_fps() {
 }
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // -------------------------------------- Graphics Functions --------------------------------------
 
-static inline void draw(struct gfx_drawbuf* dbuf, u32 slen, u32 ilen) {
-	if(!slen) return;
+static void draw() {
+	gfx_gl_texture* tex = ctx->gl.gltexes + ctx->curdrawbuf;
+	gfx_drawbuf* dbuf = &tex->drawbuf;
+	u32 slen = vlen(dbuf->shp);
+	u32 ilen = vlen(dbuf->idx);
 
 	if(!ctx->gl.vbufid) {
 		glGenBuffers(1, &ctx->gl.vbufid);
@@ -769,30 +729,32 @@ static inline void draw(struct gfx_drawbuf* dbuf, u32 slen, u32 ilen) {
 		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ctx->gl.idxbufid);
 		
 		// Applies layout
-		gfx_applylayout(3, (struct gfx_layoutelement[]) {
+		gfx_applylayout(4, (struct gfx_layoutelement[]) {
 			{ GL_FLOAT, 3, false }, // X, Y, Z
 			{ GL_FLOAT, 2, false }, // Texture X, Texture Y
+			{ GL_FLOAT, 1, false }, // Texture Index in 2D Array Textures
 			{ GL_FLOAT, 4, false }  // Color (RGBA)
 		});
 	}
 
 	// Vertex buffer upload
-	if(dbuf->lastsize.w < slen)
-		glBufferData(GL_ARRAY_BUFFER, slen * sizeof(*dbuf->shp), dbuf->shp, GL_DYNAMIC_DRAW), dbuf->lastsize.w = slen;
+	if(ctx->gl.maxdrawbufsize.w < slen)
+		glBufferData(GL_ARRAY_BUFFER, slen * sizeof(*dbuf->shp), dbuf->shp, GL_DYNAMIC_DRAW),
+		ctx->gl.maxdrawbufsize.w = slen;
 	else glBufferSubData(GL_ARRAY_BUFFER, 0, slen * sizeof(*dbuf->shp), dbuf->shp);
 	
 	// Element array buffer upload
-	if(dbuf->lastsize.h < ilen)
+	if(ctx->gl.maxdrawbufsize.h < ilen)
 		glBufferData(GL_ELEMENT_ARRAY_BUFFER, ilen * sizeof(*dbuf->idx), dbuf->idx, GL_DYNAMIC_DRAW),
-		dbuf->lastsize.h = ilen;
+		ctx->gl.maxdrawbufsize.h = ilen;
 	else glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, ilen * sizeof(*dbuf->idx), dbuf->idx);
 
 	// Draw call
 	glDrawElements(GL_TRIANGLES, ilen, GL_UNSIGNED_INT, NULL);
 
 	// Reset draw buffers and Z axis
-	if(dbuf == &ctx->drawbuf)
-		vempty(dbuf->shp), vempty(dbuf->idx);
+	vempty(dbuf->shp);
+	vempty(dbuf->idx);
 }
 
 
@@ -805,13 +767,15 @@ void fill(u8 r, u8 g, u8 b, u8 a) {
 }
 
 void quad(int x1, int y1, int x2, int y2, int x3, int y3, int x4, int y4) {
-	u32 curidx = vlen(ctx->drawbuf.shp);
-	vpusharr(ctx->drawbuf.idx, { curidx, curidx + 1, curidx + 2, curidx + 2, curidx, curidx + 3 });
-	vpusharr(ctx->drawbuf.shp, {
-		{ .p = { (f32) x1, (f32) y1 }, .z = (ctx->z += .001f), .tp = { -1.f, -1.f }, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } },
-		{ .p = { (f32) x2, (f32) y2 }, .z = (ctx->z         ), .tp = { -1.f, -1.f }, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } },
-		{ .p = { (f32) x3, (f32) y3 }, .z = (ctx->z         ), .tp = { -1.f, -1.f }, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } },
-		{ .p = { (f32) x4, (f32) y4 }, .z = (ctx->z         ), .tp = { -1.f, -1.f }, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } }
+	gfx_drawbuf* dbuf = &ctx->gl.gltexes[ctx->curdrawbuf].drawbuf;
+	u32 curidx = vlen(dbuf->shp);
+	ctx->z += .001f;
+	vpusharr(dbuf->idx, { curidx, curidx + 1, curidx + 2, curidx + 2, curidx, curidx + 3 });
+	vpusharr(dbuf->shp, {
+		{ .p = { (f32) x1, (f32) y1 }, .z = ctx->z, .tp = { -1.f, -1.f }, .index = 0, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } },
+		{ .p = { (f32) x2, (f32) y2 }, .z = ctx->z, .tp = { -1.f, -1.f }, .index = 0, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } },
+		{ .p = { (f32) x3, (f32) y3 }, .z = ctx->z, .tp = { -1.f, -1.f }, .index = 0, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } },
+		{ .p = { (f32) x4, (f32) y4 }, .z = ctx->z, .tp = { -1.f, -1.f }, .index = 0, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } }
 	});
 }
 
@@ -820,23 +784,158 @@ void rect(int x, int y, int w, int h) {
 }
 
 
-// Sets texture lookup coordinates
-static inline void gfx_tp(f32* texcoords) {
-	struct gfx_vertexbuf* last4 = vlast(ctx->drawbuf.shp) - 3;
-	for(int i = 0; i < 4; i ++)
-		last4[i].tp[0] = texcoords[i * 2],
-		last4[i].tp[1] = texcoords[i * 2 + 1];
-}
 
 
-static inline u32 gfx_inittex(u8* tex, u32 width, u32 height, gfx_texture_type type) {
-	vpush(ctx->textures, { tex, { width, height }, 0, -1, 0, type });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ------------------------------ Texture + Atlas Creation Functions ------------------------------
+
+static u32 gfx_tex_new(GLenum format, u8* tex, u32 width, u32 height) {
+	vpush(ctx->gl.gltexes, {
+		.mipmaps = true,
+		.array = false,
+		.pixellated = false,
+		.id = 0,
+		.slot = -1,
+		.uses = 0,
+		.format = format,
+		.drawbuf = {
+			.shp = vnew(),
+			.idx = vnew()
+		},
+		.buf = tex
+	});
+	vpush(ctx->textures, {
+		.gltex = vlen(ctx->gl.gltexes) - 1,
+		.size = { width, height },
+	});
 	return vlen(ctx->textures) - 1;
 }
 
+
+static u32 gfx_atlas_new(GLenum format) {
+	gfx_atlas_node** atlas_trees = vnew();
+	gfx_atlas_node* tree = vnew();
+	vpush(tree, { .s = { INT_MAX, INT_MAX } });
+	vpush(atlas_trees, tree);
+	
+	vpush(ctx->gl.gltexes, {
+		.mipmaps = true,
+		.array = true,
+		.pixellated = true,
+		.id = 0,
+		.slot = -1,
+		.uses = 0,
+		.format = format,
+		.drawbuf = {
+			.shp = vnew(),
+			.idx = vnew()
+		},
+		.buf = malloc(GFX_ATLAS_START_SIZE * GFX_ATLAS_START_SIZE * gfx_glsizeof(format))
+	});
+	vpush(ctx->atlases, {
+		.added = false,
+		.gltex = vlen(ctx->gl.gltexes) - 1,
+		.size = { GFX_ATLAS_START_SIZE, GFX_ATLAS_START_SIZE },
+		.atlas_trees = atlas_trees,
+	});
+	return vlen(ctx->atlases) - 1;
+}
+
+static u32 gfx_atlas_try_push(u32 atlas, u32 layer, struct gfx_atlas_node** maybe, gfx_vector* size) {
+	gfx_texture_atlas* tex_atlas = ctx->atlases + atlas;
+	u32 growth = 1;
+	do {
+		*maybe = gfx_atlas_insert(atlas, layer, 0, size);
+		
+		if (*maybe) return growth;
+		else if (tex_atlas->size.w >= GFX_ATLAS_MAX_SIZE)
+			return 0;
+		
+		info("Atlas (id: %d) size doubled", atlas);
+		growth *= 2, tex_atlas->size.w *= 2, tex_atlas->size.h *= 2;
+	} while(true);
+}
+
+/* @param pos: Supply a pointer to a vector in the overarching scope so we can write position to it */
+static u32 gfx_atlases_add(GLenum format, gfx_vector* size, gfx_vector* pos, u32* ret_atlas) {
+	u32 growth, cur_atlas = 0, cur_layer = 0;
+	struct gfx_atlas_node* maybe;
+	for(; cur_atlas < vlen(ctx->atlases); cur_atlas ++)
+		if(ctx->gl.gltexes[ctx->atlases[cur_atlas].gltex].format == format)
+			for(; cur_layer < vlen(ctx->atlases[cur_atlas].atlas_trees) &&
+						!(growth = gfx_atlas_try_push(cur_atlas, cur_layer, &maybe, size)); cur_layer ++);
+	
+	// Positions the atlas to the correct one, as it was incremented once more than needed when the for loop was ending (previous bug 3:)
+	cur_atlas --;
+
+	if(growth == 0) {
+		if(vlen(ctx->atlases[cur_atlas].atlas_trees) >= ctx->gl.max_texture_layers)
+			gfx_atlas_try_push(cur_atlas = gfx_atlas_new(format), (cur_layer = 0), &maybe, size);
+		else {
+			gfx_atlas_node* new_tree = vnew();
+			u32 atlas_trees_last_element = vlen(ctx->atlases[cur_atlas].atlas_trees);
+			vpush(new_tree, { .s = { INT_MAX, INT_MAX } });
+			vpush(ctx->atlases[cur_atlas].atlas_trees, new_tree);
+			gfx_atlas_try_push(cur_atlas, atlas_trees_last_element, &maybe, size);
+		}
+	}
+
+	gfx_texture_atlas* atlas = ctx->atlases + cur_atlas;
+	gfx_gl_texture* tex = ctx->gl.gltexes + ctx->atlases[cur_atlas].gltex;
+	// if(!tex->buf)
+	// 	tex->buf = malloc(atlas->size.w * atlas->size.h * sizeof(u8));
+	// else
+	if(growth > 1) {
+		int ow = atlas->size.w / growth, oh = atlas->size.h / growth;
+		u8* ntex = malloc(atlas->size.w * atlas->size.h * sizeof(u8));
+		u8* otex = tex->buf;
+		
+		for(int i = 0; i < oh; i ++)
+			memcpy(ntex + i * atlas->size.w, otex + i * ow, ow);
+
+		tex->buf = ntex;
+		free(otex);
+	}
+
+	atlas->added = true;
+	*pos = maybe->p;
+	*ret_atlas = cur_atlas;
+	return cur_layer;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// --------------------------- OpenGL Texture Drawing Related Functions ---------------------------
+
 // https://stackoverflow.com/a/21624571/10013227
 #if defined(_MSC_VER) && !defined(__clang__)
-	static inline u32 firstbit(x) {
+	static u32 firstbit(x) {
 		unsigned long index;
 		_BitScanForward(&index, x);
 		return index;
@@ -850,15 +949,15 @@ static inline u32 gfx_inittex(u8* tex, u32 width, u32 height, gfx_texture_type t
 			0, 1, 28, 2, 29, 14, 24, 3, 30, 22, 20, 15, 25, 17, 4, 8, 
 			31, 27, 13, 23, 21, 19, 16, 7, 26, 12, 18, 6, 11, 5, 10, 9
 		};
-		#define firstbit(c) MultiplyDeBruijnBitPosition[((uint32_t)((c & -c) * 0x077CB531U)) >> 27];
+		#define firstbit(c) MultiplyDeBruijnBitPosition[((u32)((c & -c) * 0x077CB531U)) >> 27];
 	#endif
 #endif
 
-static inline u32 findslot() {
+static u32 findslot() {
 	u32 slot = firstbit(~ctx->slots) - 1;
 	if(slot < 0) {
-		for(int i = 0; i < vlen(ctx->textures); i ++)
-			if(ctx->textures[i].slot == 31) ctx->textures[i].slot = -1;
+		for(int i = 0; i < vlen(ctx->gl.gltexes); i ++)
+			if(ctx->gl.gltexes[i].slot == 31) ctx->gl.gltexes[i].slot = -1;
 		return 31;
 	}
 	ctx->slots |= 1 << slot;
@@ -866,119 +965,104 @@ static inline u32 findslot() {
 }
 
 
-static inline void gfx_setcurtex(img tex) {
-	ctx->textures[tex].uses++;
-	if(ctx->gl.curtex == ctx->textures[tex].slot) return;
-	gfx_useti("u_tex", ctx->textures[tex].slot);
-	ctx->gl.curtex = ctx->textures[tex].slot;
+// Sets texture lookup coordinates
+static void gfx_tp(f32* texcoords) {
+	struct gfx_vertexbuf* last4 = vlast(ctx->gl.gltexes[ctx->curdrawbuf].drawbuf.shp) - 3;
+	for(int i = 0; i < 4; i ++)
+		last4[i].tp[0] = texcoords[i * 2],
+		last4[i].tp[1] = texcoords[i * 2 + 1];
 }
 
-static inline void gfx_activetex(img tex) {
-	ctx->textures[tex].slot = findslot();
-	glActiveTexture(GL_TEXTURE0 + ctx->textures[tex].slot);
+static void gfx_usetex(u32 gltex) {
+	ctx->curdrawbuf = gltex;
+	ctx->gl.gltexes[gltex].uses++;
 }
 
-static inline void gfx_texupload(img tex) {
-	gfx_activetex(tex);
-	
-	gfx_texture* t = ctx->textures + tex;
-	gfx_texture_type type = t->type;
-	
-	GLenum format;
-	if(type == GFX_TEX_TYPEFACE){
-		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-		format = GL_RED;
-	} else {
-		glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-		format = GL_RGBA;
-	}
+static void gfx_setcurtex(u32 gltex) {
+	gfx_usetex(gltex);
+	if(ctx->gl.curtex == ctx->gl.gltexes[gltex].slot) return;
+	gfx_useti("u_tex", (ctx->gl.curtex = ctx->gl.gltexes[gltex].slot));
+}
+
+static void gfx_activetex(u32 gltex) {
+	glActiveTexture(GL_TEXTURE0 + (ctx->gl.gltexes[gltex].slot = findslot()));
+}
+
+static void gfx_tex_upload(u32 gltex, gfx_vector size, u32 layers) {
+	gfx_activetex(gltex);
+	gfx_gl_texture* t = ctx->gl.gltexes + gltex;
+	glPixelStorei(GL_UNPACK_ALIGNMENT, gfx_glsizeof(t->format));
+
 	
 	// Generates and binds the texture
+	GLenum texture_type = layers <= 1 ? GL_TEXTURE_2D : GL_TEXTURE_2D_ARRAY;
 	glGenTextures(1, &t->id);
-	glBindTexture(GL_TEXTURE_2D, t->id);
+	glBindTexture(texture_type, t->id);
 	
 	// Sets default params
-	GLenum minmagfilter = type == GFX_TEX_PIXELART ? GL_NEAREST : GL_LINEAR;
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minmagfilter);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, minmagfilter);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	GLenum minmagfilter = t->pixellated ? GL_NEAREST : GL_LINEAR;
+	glTexParameteri(texture_type, GL_TEXTURE_MIN_FILTER, minmagfilter);
+	glTexParameteri(texture_type, GL_TEXTURE_MAG_FILTER, minmagfilter);
+	glTexParameteri(texture_type, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(texture_type, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
 	// Sends texture data to the gpu
-	glTexImage2D(GL_TEXTURE_2D, 0, format, t->size.w, t->size.h, 0, format, GL_UNSIGNED_BYTE, t->tex);
+	if(layers <= 1)
+		glTexImage2D(texture_type, 0, t->format, size.w, size.h, 0, t->format, GL_UNSIGNED_BYTE, t->buf);
+	else glTexImage3D(texture_type, 0, t->format, size.w, size.h, layers, 0, t->format, GL_UNSIGNED_BYTE, t->buf);
 	
 	// We just don't need mipmaps for fonts so we do this for normal images
-	if(type == GFX_TEX_IMAGE) {
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
-		glGenerateMipmap(GL_TEXTURE_2D); // CALL AFTER UPLOAD
+	if(!t->pixellated) {
+		glTexParameteri(texture_type, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+		glGenerateMipmap(texture_type); // CALL AFTER UPLOAD
 	}
 }
 
-static inline void gfx_texupdate(img tex) {
-	glActiveTexture(GL_TEXTURE0 + ctx->textures[tex].slot);
-	gfx_texture* t = ctx->textures + tex;
-	GLenum format = t->type == GFX_TEX_TYPEFACE ? GL_RED : GL_RGBA;
-	glTexImage2D(GL_TEXTURE_2D, 0, format, t->size.w, t->size.h, 0, format, GL_UNSIGNED_BYTE, t->tex);
+static void gfx_tex_update(u32 gltex, gfx_vector size, u32 layers) {
+	gfx_gl_texture* t = ctx->gl.gltexes + gltex;
+	glActiveTexture(GL_TEXTURE0 + t->slot);
+	glPixelStorei(GL_UNPACK_ALIGNMENT, gfx_glsizeof(t->format));
+	if(layers <= 1)
+		glTexImage2D(GL_TEXTURE_2D, 0, t->format, size.w, size.h, 0, t->format, GL_UNSIGNED_BYTE, t->buf);
+	else glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, t->format, size.w, size.h, layers, 0, t->format, GL_UNSIGNED_BYTE, t->buf);
 }
 
 img gfx_loadimg(char* file) {
 	int width, height;
 	u8* t; CHECK_CALL(!(t = gfx_readtoimg(file, &width, &height)), return -1, "Couldn't load image '%s'", file);
 	info("Loaded image '%s' (%dx%d)", file, width, height);
-	return gfx_inittex(t, width, height, GFX_TEX_IMAGE);
+	return gfx_tex_new(GL_RGBA, t, width, height);
 }
 
 
 void image(img img, int x, int y, int w, int h) {
 	if(img < 0) return;
+	gfx_gl_texture* tex = ctx->gl.gltexes + ctx->textures[img].gltex;
 	
 	// Sets up the environment
-	// if(vlen(ctx->drawbuf.shp)) gfx_useti("u_shape", SHAPE), draw(&ctx->drawbuf, vlen(ctx->drawbuf.shp), vlen(ctx->drawbuf.idx));
-	if(!ctx->textures[img].id) gfx_texupload(img);
-	else if(ctx->textures[img].slot < 0) gfx_activetex(img);
-	gfx_setcurtex(img);
+	if(!tex->id) gfx_tex_upload(ctx->textures[img].gltex, ctx->textures[img].size, 1);
+	else if(tex->slot < 0) gfx_activetex(ctx->textures[img].gltex);
+	gfx_usetex(ctx->textures[img].gltex);
 
 	// Creates a rectangle the image will be held on, then uploads the texture coordinates to map to the image
-	struct gfx_drawbuf d = {
-		.shp = (struct gfx_vertexbuf[]) {
-			{{ x    , y     }, (ctx->z += .001f), { 0.f, 0.f }, { 1.f, 1.f, 1.f, 1.f }}, // ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] }},
-			{{ x + w, y     }, (ctx->z         ), { 1.f, 0.f }, { 1.f, 1.f, 1.f, 1.f }}, // ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] }},
-			{{ x + w, y + h }, (ctx->z         ), { 1.f, 1.f }, { 1.f, 1.f, 1.f, 1.f }}, // ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] }},
-			{{ x    , y + h }, (ctx->z         ), { 0.f, 1.f }, { 1.f, 1.f, 1.f, 1.f }}  // ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] }}
-		},
-		.idx = (u32[]) { 0, 1, 2, 2, 0, 3 },
-		.lastsize = ctx->drawbuf.lastsize
-	};
-	
-	gfx_useti("u_shape", 2);
-	draw(&d, 4, 6);
+	rect(x, y, w, h);
+	gfx_tp((float[]) { 0.f, 0.f, 1.f, 0.f, 1.f, 1.f, 0.f, 1.f });
 }
 
 gfx_vector* isize(img img) { return &ctx->textures[img].size; }
 
-/*
-	Text drawing process:
-		Load Stage:
-			- gfx_loadfont()
-				- Creates Freetype initial context and Face
-				- Loads a space but doesn't do anything except update the space_width prop
-				- Adds the alphabet to the atlas(atlas not rendered yet)
-					- Calls gfx_loadfontchar() in a loop
-		
-		Draw Loop:
-			- text()
-				- When creating Index + Vertex (*buf)fers, check for unloaded chars and load them
-			- gfx_loadfont()
-				- Same thing as load
-			- gfx_draw() call
-				- Loop through every font, determine which need to be updated
-				- First draw() call:
-					- Call gfx_createfontatlastex()
-				- Subsequent draw() calls:
-					- Check if there were any new characters loaded, and call gfx_updatefontatlastex()
-*/
 
-static inline FT_ULong gfx_readutf8(u8** str) {
+
+
+
+
+
+
+
+
+// ------------------------------------ Text Drawing Functions ------------------------------------
+
+static FT_ULong gfx_readutf8(u8** str) {
 	if(**str == 0) return 0;
 	FT_ULong code_point = 0;
 
@@ -997,58 +1081,35 @@ static inline FT_ULong gfx_readutf8(u8** str) {
 
 static gfx_char* gfx_loadfontchar(typeface tf, FT_ULong c) {
 	gfx_typeface* face = ctx->fonts.store + tf;
-	gfx_texture* tex = ctx->textures + face->tex;
+	CHECK_CALL(FT_Set_Pixel_Sizes(face->face, 0, ctx->fonts.size * 4.0f / 3.0f), return NULL, "Couldn't set size");
 	CHECK_CALL(FT_Load_Char(face->face, c, FT_LOAD_RENDER), return NULL, "Couldn't load char '%c' (%X)", c, c);
 	
-	int width = ((FT_Face) face->face)->glyph->bitmap.width;
-	int height = ((FT_Face) face->face)->glyph->bitmap.rows;
-	gfx_vector size = { width, height };
+	int width = face->face->glyph->bitmap.width;
+	int height = face->face->glyph->bitmap.rows;
 
 	// Tries to add the character, resizing the whole texture until it's done
-	struct gfx_atlas_node* maybe;
-	int growth = 1;
-	while(!(maybe = gfx_atlas_insert(face, 0, &size))) {
-		info("Atlas size doubled for font '%s'", face->name);
-		growth *= 2, tex->size.w *= 2, tex->size.h *= 2;
-	}
+	gfx_vector pos;
+	gfx_vector size = { width, height };
+	u32 atlas;
+	u32 layer = gfx_atlases_add(GL_RED, &size, &pos, &atlas);
+	gfx_gl_texture* tex = ctx->gl.gltexes + ctx->atlases[atlas].gltex;
 
-	if(!tex->tex)
-		tex->tex = malloc(tex->size.w * tex->size.h * sizeof(u8));
-	else if(growth > 1) {
-		int ow = tex->size.w / growth, oh = tex->size.h / growth;
-		u8* ntex = malloc(tex->size.w * tex->size.h * sizeof(u8));
-		u8* otex = tex->tex;
-		
-		for(int i = 0; i < oh; i ++)
-			memcpy(ntex + i * tex->size.w, otex + i * ow, ow);
+	// Writes the character's pixels to the atlas buffer.
+	u8* insertsurface = tex->buf + pos.x + pos.y * ctx->atlases[atlas].size.w;
+	for(int i = 0; i < height; i ++)
+		memcpy(insertsurface + i * ctx->atlases[atlas].size.w, face->face->glyph->bitmap.buffer + i * width, width);
 
-		tex->tex = ntex;
-		free(otex);
-	}
-
-	float* field = malloc(width * height * sizeof(float));
-	sdt_dead_reckoning(width, height, 16, ((FT_Face) face->face)->glyph->bitmap.buffer, field);
-
-	int x = maybe->p.x, y = maybe->p.y;
-	int tw = tex->size.w, th = tex->size.h;
-	u8* letter = tex->tex + x + y * tw;
-	for (u32 i = 0; i < width * height; i++) {
-		float res = 128.f - field[i];
-		if(res >= 255.f) letter[i % width + (i / width) * tw] = 255;
-		else if (res <= 0.f) letter[i % width + (i / width) * tw] = 0;
-		else letter[i % width + (i / width) * tw] = res;
-	}
-
-	face->added = true;
-	hset(face->chars, c) = (gfx_char) {
+	hsetst(face->chars, { c, ctx->fonts.size }) = (gfx_char) {
 		.c = c,
 		.size = size,
 		.bearing = (gfx_vector) {
-			((FT_Face) face->face)->glyph->bitmap_left,
-			((FT_Face) face->face)->glyph->bitmap_top
+			face->face->glyph->bitmap_left,
+			face->face->glyph->bitmap_top
 		},
-		.advance = ((FT_Face) face->face)->glyph->advance.x >> 6,
-		.place = maybe->p
+		.advance = face->face->glyph->advance.x >> 6,
+		.place = pos,
+		.atlas = atlas,
+		.layer = layer
 	};
 	return hlastv(face->chars);
 }
@@ -1057,16 +1118,10 @@ typeface gfx_loadfont(const char* file) {
 
 	gfx_typeface new = {
 		.name = malloc(strlen(file) + 1),
-		.atlas_tree = vnew(),
-		.tex = gfx_inittex(NULL,
-			GFX_FONT_ATLAS_START_SIZE,
-			GFX_FONT_ATLAS_START_SIZE,
-			GFX_TEX_TYPEFACE),
 		.chars = {0},
 		.face = NULL
 	};
 	memcpy(new.name, file, strlen(file) + 1);
-	vpush(new.atlas_tree, { .s = { INT_MAX, INT_MAX } });
 	
 	// Loads the freetype library.
 	if(!ft)
@@ -1078,7 +1133,7 @@ typeface gfx_loadfont(const char* file) {
 
 	// Adds space_width
 	CHECK_CALL(FT_Load_Char(new.face, ' ', FT_LOAD_RENDER), return -1, "Couldn't load the Space Character ( ) ");
-	new.space_width = ((FT_Face) new.face)->glyph->advance.x >> 6;
+	new.space_width = new.face->glyph->advance.x >> 6;
 
 	// Stores the font
 	vpush(ctx->fonts.store, new);
@@ -1090,44 +1145,53 @@ void fontsize(u32 size) { ctx->fonts.size = size; }
 void lineheight(f32 h) { ctx->fonts.lh = h; }
 
 // Draws any leftover shapes and text
-static inline void drawtext() {
-	if(!vlen(ctx->fonts.store)) goto draw;
-	gfx_typeface* face = ctx->fonts.store + ctx->fonts.cur;
-	gfx_texture* tex = ctx->textures + face->tex;
-	
-	if(!tex->id) {
-		stbi_write_png("bitmap.png", tex->size.w, tex->size.h, 1, tex->tex, tex->size.w);
-		gfx_texupload(face->tex);
-	} else if(face->added) {
-		stbi_write_png("bitmap.png", tex->size.w, tex->size.h, 1, tex->tex, tex->size.w);
-		gfx_texupdate(face->tex);
-		face->added = false;
-	}
-	else if(tex->slot < 0) gfx_activetex(face->tex);
-	gfx_setcurtex(face->tex);
+static void drawtext() {
+	for(u32 i = 0; i < vlen(ctx->atlases); i ++) {
+		gfx_gl_texture* gtex = ctx->gl.gltexes + ctx->atlases[i].gltex;
+		if(!vlen(gtex->drawbuf.idx)) continue;
+		if(!gtex->id)
+			gfx_tex_upload(ctx->atlases[i].gltex, ctx->atlases[i].size, vlen(ctx->atlases[i].atlas_trees) - 1);
+		else if (ctx->atlases[i].added)
+			gfx_tex_update(ctx->atlases[i].gltex, ctx->atlases[i].size, vlen(ctx->atlases[i].atlas_trees) - 1);
+		else if(gtex->slot < 0) gfx_activetex(ctx->atlases[i].gltex);
+		gfx_setcurtex(ctx->atlases[i].gltex);
 
-draw:
-	gfx_useti("u_shape", TEXT);
-	draw(&ctx->drawbuf, vlen(ctx->drawbuf.shp), vlen(ctx->drawbuf.idx));
+		if(gtex->format == GL_RED)
+			gfx_useti("u_shape", TEXT);
+		else gfx_useti("u_shape", IMAGE);
+		
+		draw();
+	}
+
+	for(u32 i = 0; i < vlen(ctx->textures); i ++) {
+		gfx_gl_texture* gtex = ctx->gl.gltexes + ctx->textures[i].gltex;
+		if(!vlen(gtex->drawbuf.idx)) continue;
+		if(!gtex->id)
+			gfx_tex_upload(ctx->textures[i].gltex, ctx->textures[i].size, 1);
+		else if(gtex->slot < 0) gfx_activetex(ctx->textures[i].gltex);
+		gfx_setcurtex(ctx->textures[i].gltex);
+
+		gfx_useti("u_shape", IMAGE);
+		draw();
+	}
 }
 void font(typeface face, u32 size) {
 	
-	// If you're setting to the same font, just return preemptively
-	if(face == ctx->fonts.cur) goto end;
+// 	// If you're setting to the same font, just return preemptively
+// 	if(face == ctx->fonts.cur) goto end;
 	
-	// Draws anything left in the shape buffer from previous fonts
-	if(vlen(ctx->drawbuf.shp) && ctx->drawbuf.textdrawn) drawtext();
+// 	// Draws anything left in the shape buffer from previous fonts
+// 	if(vlen(ctx->drawbuf.shp) && ctx->drawbuf.textdrawn) drawtext();
 	
-	ctx->fonts.cur = face;
-	ctx->drawbuf.textdrawn = false;
-end:
-	if(size > 0) ctx->fonts.size = size;
+// 	ctx->fonts.cur = face;
+// 	ctx->drawbuf.textdrawn = false;
+// end:
+// 	if(size > 0) ctx->fonts.size = size;
 }
 void text(const char* str, int x, int y) {
 	if(!vlen(ctx->fonts.store)) return;
 
 	gfx_typeface* face = ctx->fonts.store + ctx->fonts.cur;
-	gfx_texture* tex = ctx->textures + face->tex;
 	f32 scale = (f32) ctx->fonts.size * 4.0f / 3.0f /*px -> pts*/ / RENDERING_FONT_SIZE(.0f);
 	ctx->z += .001f;
 
@@ -1148,33 +1212,37 @@ void text(const char* str, int x, int y) {
 			continue;
 		}
 		
-		gfx_char* ch = hget(face->chars, point);
+		gfx_char* ch = hgetst(face->chars, { point, ctx->fonts.size });
 		if(!ch) ch = gfx_loadfontchar(ctx->fonts.cur, point);
+		if(!ch) continue;
+		
+		gfx_texture_atlas* atlas = ctx->atlases + ch->atlas;
+		gfx_drawbuf* dbuf = &ctx->gl.gltexes[atlas->gltex].drawbuf;
 
-		realx = (f32) curx + ch->bearing.x * scale;
-		realy = (f32) cury - ch->bearing.y * scale;
-		w     = (f32) ch->size.w * scale;
-		h     = (f32) ch->size.h * scale;
+		realx = (f32) curx + ch->bearing.x;
+		realy = (f32) cury - ch->bearing.y;
+		w     = (f32) ch->size.w;
+		h     = (f32) ch->size.h;
 
-		tx = ch->place.x / (f32) tex->size.w;
-		ty = ch->place.y / (f32) tex->size.h;
-		tw = ch->size.w  / (f32) tex->size.w;
-		th = ch->size.h  / (f32) tex->size.h;
+		tx = ch->place.x / (f32) atlas->size.w;
+		ty = ch->place.y / (f32) atlas->size.h;
+		tw = ch->size.w  / (f32) atlas->size.w;
+		th = ch->size.h  / (f32) atlas->size.h;
+		
+		// #error "NEED TO PROVIDE TEXTURE PER CHARACTER SOMEHOW"
 		
 		// Kind of copied from quad() so it can be more efficient with less int -> float -> int conversions.
-		u32 curidx = vlen(ctx->drawbuf.shp);
-		vpusharr(ctx->drawbuf.idx, { curidx, curidx + 1, curidx + 2, curidx + 2, curidx, curidx + 3 });
-		vpusharr(ctx->drawbuf.shp, {
-			{{ realx    , realy     }, ctx->z, { tx     , ty      }, { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] }},
-			{{ realx + w, realy     }, ctx->z, { tx + tw, ty      }, { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] }},
-			{{ realx + w, realy + h }, ctx->z, { tx + tw, ty + th }, { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] }},
-			{{ realx    , realy + h }, ctx->z, { tx     , ty + th }, { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] }}
+		u32 curidx = vlen(dbuf->shp);
+		vpusharr(dbuf->idx, { curidx, curidx + 1, curidx + 2, curidx + 2, curidx, curidx + 3 });
+		vpusharr(dbuf->shp, {
+			{{ realx    , realy     }, ctx->z, { tx     , ty      }, (float) ch->layer, { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] }},
+			{{ realx + w, realy     }, ctx->z, { tx + tw, ty      }, (float) ch->layer, { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] }},
+			{{ realx + w, realy + h }, ctx->z, { tx + tw, ty + th }, (float) ch->layer, { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] }},
+			{{ realx    , realy + h }, ctx->z, { tx     , ty + th }, (float) ch->layer, { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] }}
 		});
 
 		// Advance cursors for next glyph
-		curx += (float) ch->advance * scale;
+		curx += (float) ch->advance;
 	}
-	
-	ctx->drawbuf.textdrawn = true;
 }
 
