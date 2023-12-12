@@ -82,7 +82,6 @@ link_directories(./deps/lib)
 add_executable(graphics
         deps/hash.c
         deps/hashfunc.c
-        deps/vec.c
         lib/2dgfx.c
         main.c)
 
