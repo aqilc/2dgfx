@@ -1,0 +1,959 @@
+<!-- https://wdobbie.com/pdf/ -->
+<!-- https://wdobbie.com/post/gpu-text-rendering-with-vector-textures-details/ -->
+<!-- https://wdobbie.com/post/gpu-text-rendering-with-vector-textures/ -->
+
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no">
+<title>Resolution independent GPU text rendering demo</title>
+<style type="text/css">
+
+	html, body {
+		width: 100%;
+		height: 100%
+		margin 0;
+		padding: 0;
+		overflow: hidden;
+		font-family: sans-serif;
+	}
+
+
+	a {
+		color: white;
+	}
+
+	a:hover {
+		color: #ffd;
+	}
+
+	div#canvaswrap {
+		position: fixed;
+		zoom: reset;
+		right: 0;
+		bottom: 0;
+		top: 0;
+		left: 0;
+		z-index: -1;
+	}
+
+	div#toolbar {
+		margin: 0;
+		right: 0;
+		position: absolute;
+		display: inline-block;
+		max-width: 22em;
+		background-color: rgba(0, 0, 0, .6);
+		color: white;
+		padding: 1em;
+	}
+
+	canvas {
+		width: 100%;
+		height: 100%;
+		-khtml-user-select: none;
+		-o-user-select: none;
+		-moz-user-select: -moz-none;
+		-webkit-user-select: none;
+		display: none;
+	}
+
+	#loadinginfo {
+		position: absolute;
+		top: 50%;
+		left: 50%;
+		margin-top: -100px;
+		margin-left: -150px;
+		width: 300px;
+		height: 200px;
+		background-color: white;
+		color: black;
+		white-space: pre-wrap;
+		padding: 1em;
+		overflow: auto;
+	}
+
+	@media screen and (max-width: 600px) {
+		#fsbutton { display: none;}
+	}
+</style>
+<script type="x-shader/x-vertex" id="pagevs">
+	uniform vec2 uPositionMul;
+	uniform vec2 uPositionAdd;
+	uniform vec2 uCanvasSize;
+
+	attribute vec2 aPosition;
+
+	void main() {
+		// Transform position
+		vec2 pos = aPosition;
+		pos.y = 1.0 - pos.y;
+		pos = pos * uPositionMul + uPositionAdd;
+
+		gl_Position = vec4(pos, 0.0, 1.0);
+		gl_Position.x *= uCanvasSize.y / uCanvasSize.x;
+	}
+</script>
+<script type="x-shader/x-fragment" id="pagefs">
+	void main() {
+		gl_FragColor = vec4(1.0);
+	}
+</script>
+<script type="x-shader/x-vertex" id="imagevs">
+	uniform vec2 uPositionMul;
+	uniform vec2 uPositionAdd;
+
+	attribute vec2 aPosition;
+	attribute float aAlpha;
+	attribute float aWhichVertex;
+
+	varying float vAlpha;
+	varying vec2 vTexCoord;
+
+	void main() {
+		// Transform position
+		vec2 pos = aPosition;
+		pos.y = 1.0 - pos.y;
+		pos = pos * uPositionMul + uPositionAdd;
+		gl_Position = vec4(pos, 0.0, 1.0);
+
+		// TexCoord
+		// 2    3
+		//
+		//
+		// 0    1
+		vTexCoord = vec2(mod(aWhichVertex, 2.0), floor(aWhichVertex/2.0));
+
+		vAlpha = aAlpha;
+	}
+</script>
+<script type="x-shader/x-fragment" id="imagefs">
+	uniform sampler2D uSampler;
+
+	varying vec2 vTexCoord;
+	varying vec2 vAlpha;
+
+	void main() {
+		gl_FragColor = texture2D(uSampler, vTexCoord);
+		gl_FragColor.a *= vAlpha;
+	}
+</script>
+
+<script>
+	"use strict";
+	var canvas;
+	var gl;
+	var glext;
+	var timerQuery, waitingForTimer, lastFrametime;
+	var vertexShader, fragmentShader;
+	var glyphProgram, pageProgram, imageProgram;
+	var atlasTexture;
+	var glyphBuffer;
+	var pageBuffer;
+	var pageData;
+	var vertexCount = 0;
+	var indexCount = 0;
+	var int16PerVertex = 6;	// const
+	var renderRequired = false;
+
+	var transform = {
+		x: 0.5,
+		y: 0.5,
+		zoom: 0
+	}
+
+	var animTransform = {
+		x: 0,
+		y: 0,
+		zoom: 1
+	}
+	
+	var lastAnimationTimestamp;
+	var animationDuration = 60;
+
+	function mix(b, a, t) {
+		if (t < 0) t = 0;
+		else if (t > 1) t = 1;
+		
+		return a * t + b * (1 - t);
+	}
+	
+	function log(s) {
+		console.log(s);
+		document.getElementById("loadinginfo").textContent += s + "\n";
+	}
+
+	function significantChange(a, b) {
+		if (Math.abs(b) < Math.abs(a)) {
+			var t = b;
+			b = a;
+			a = t;
+		}
+		if (b == 0) return false;
+		return (a/b) < 0.99999999
+	}
+
+	function getAnimatedValue(value, target, elapsed) {
+			return mix(value, target, elapsed / animationDuration);
+	}
+	
+	function updateAnimations(timestamp) {
+		var elapsed = lastAnimationTimestamp ? timestamp - lastAnimationTimestamp : 0;
+		
+		var changed = false;
+		for (var key in animTransform) {
+			var newval = getAnimatedValue(animTransform[key], transform[key], elapsed);
+			if (significantChange(newval, animTransform[key])) {
+				changed = true;
+			}
+			animTransform[key] = newval;
+		}
+		
+		lastAnimationTimestamp = timestamp;
+
+		return changed;
+	}
+
+	function finishAnimations() {
+		for (var key in animTransform) {
+			animTransform[key] = transform[key];
+		}
+		forceRender();
+	}
+
+	function forceRender() {
+		renderRequired = true;
+	}
+	
+	function initGl() {
+		// need alpha: false so what's behind the webgl canvas doesn't bleed through
+		// see http://www.zovirl.com/2012/08/24/webgl_alpha/
+		gl = canvas.getContext("webgl", { alpha: false});
+		if (gl == null) {
+			gl = canvas.getContext("experimental-webgl", { alpha: false});
+			if (gl == null) {
+				log("Failed to create WebGL context");
+				return;
+			}
+		}
+
+        if (gl.getExtension('OES_standard_derivatives') == null) {
+            log("Failed to enable OES_standard_derivatives");
+            return;
+        }
+
+        glext = gl.getExtension('EXT_disjoint_timer_query');
+        if (glext) {
+        	timerQuery = glext.createQueryEXT();
+        	document.getElementById("frametime").style.display = "inline";
+        }
+
+		gl.disable(gl.DEPTH_TEST);
+
+		gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);   
+
+		gl.viewport(0, 0, canvas.width, canvas.height);
+		gl.clearColor(160/255, 169/255, 175/255, 1.0);
+	}
+
+    function compileShader(str, shaderType) {
+		var shader;
+		if (shaderType == "frag") {
+			shader = gl.createShader(gl.FRAGMENT_SHADER);
+		} else if (shaderType == "vert") {
+			shader = gl.createShader(gl.VERTEX_SHADER);
+		} else {
+			log("Unknown shader type: " + shaderType);
+			return null;
+		}
+		
+		gl.shaderSource(shader, str);
+		gl.compileShader(shader);
+		if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+			log("Failed to compile " + shaderType + " shader:\n" + gl.getShaderInfoLog(shader));
+			//console.log("Shader source:\n" + str);
+			return null;
+		}
+		return shader;
+    }	
+
+	function getShader(id) {
+		var elem = document.getElementById(id);
+		if (!elem) {
+			log("Can't find shader element " + id);
+			return null;
+		}
+		var shaderType;
+		if (elem.type == "x-shader/x-vertex") {
+			shaderType = "vert";
+		} else if (elem.type == "x-shader/x-fragment") {
+			shaderType = "frag";
+		} else {
+			log("getShader: unknown shader type in script tag for id " + id);
+		}
+
+		return compileShader(elem.textContent, shaderType);
+	}
+
+    function checkShadersReady() {
+		if (fragmentShader && vertexShader) {
+			if (glyphProgram) {
+				gl.deleteProgram(glyphProgram);
+			}
+			log("Linking shader program")
+			glyphProgram = gl.createProgram();
+			gl.attachShader(glyphProgram, vertexShader);
+			gl.attachShader(glyphProgram, fragmentShader);
+			gl.linkProgram(glyphProgram);
+			
+			if (!gl.getProgramParameter(glyphProgram, gl.LINK_STATUS)) {
+				log("Could not link glyph shader program: " + gl.getProgramInfoLog(program));
+				gl.deleteProgram(glyphProgram);
+				glyphProgram = null;
+				return;
+			}
+			
+			// Attribs
+			setupAttribute(glyphProgram, "aPosition");
+			setupAttribute(glyphProgram, "aCurvesMin");
+			//setupAttribute(glyphProgram, "aNormCoord");
+			setupAttribute(glyphProgram, "aColor");
+		
+			// Uniforms
+			setupUniform(glyphProgram, "uTexelSize");
+			setupUniform(glyphProgram, "uPositionMul");
+			setupUniform(glyphProgram, "uPositionAdd");
+			setupUniform(glyphProgram, "uCanvasSize");
+			setupUniform(glyphProgram, "uAtlasSampler");
+			setupUniform(glyphProgram, "uShowGrids");
+
+			gl.deleteShader(vertexShader);
+			gl.deleteShader(fragmentShader);
+			vertexShader = null;
+			fragmentShader = null;
+		}    	
+    }
+
+
+    function initImageShader() {
+	    var frag = getShader("imagefs");
+	    var vert = getShader("imagevs");
+		imageProgram = gl.createProgram();
+		gl.attachShader(imageProgram, frag);
+		gl.attachShader(imageProgram, vert);
+		gl.linkProgram(imageProgram);
+		
+		if (!gl.getProgramParameter(imageProgram, gl.LINK_STATUS)) {
+			log("Could not link image shader program" + gl.programInfoLog(imageProgram));
+			gl.deleteProgram(imageProgram);
+			return;
+		}
+		
+		// Attribs
+		setupAttribute(imageProgram, "aPosition");
+		setupAttribute(imageProgram, "aAlpha");
+		setupAttribute(imageProgram, "aWhichVertex");
+
+		// Uniforms
+		setupUniform(imageProgram, "uPositionMul");
+		setupUniform(imageProgram, "uPositionAdd");
+		setupUniform(imageProgram, "uSampler");
+
+	}
+
+    function initPageShader() {
+	    var frag = getShader("pagefs");
+	    var vert = getShader("pagevs");
+		pageProgram = gl.createProgram();
+		gl.attachShader(pageProgram, frag);
+		gl.attachShader(pageProgram, vert);
+		gl.linkProgram(pageProgram);
+		
+		if (!gl.getProgramParameter(pageProgram, gl.LINK_STATUS)) {
+			log("Could not link page shader program" + gl.programInfoLog(pageProgram));
+			gl.deleteProgram(pageProgram);
+			return;
+		}
+		
+		gl.useProgram(pageProgram);
+		
+		// Attribs
+		setupAttribute(pageProgram, "aPosition");
+
+		// Uniforms
+		setupUniform(pageProgram, "uPositionMul");
+		setupUniform(pageProgram, "uPositionAdd");
+		setupUniform(pageProgram, "uCanvasSize");
+
+		pageBuffer = gl.createBuffer();
+		gl.useProgram(null);
+	}
+
+    function processFragmentShader() {
+    	fragmentShader = compileShader(this.responseText, 'frag');
+    	checkShadersReady();
+    }
+
+    function processVertexShader() {
+    	vertexShader = compileShader(this.responseText, 'vert');
+    	checkShadersReady();
+    }
+
+	function processPageData() {
+		pageData = JSON.parse(this.responseText);
+		log("Loaded " + pageData.length + " page(s)")
+		computePageLocations();
+		var pageVerts = new Float32Array(pageData.length * 6 * 2);
+
+		for (var i=0; i<pageData.length; i++) {
+			var j = i*6*2;
+			var x0 = -pageData[i].x;
+			var y0 = pageData[i].y;
+			var x1 = x0 + pageData[i].width / pageData[0].width;
+			var y1 = y0 + pageData[i].height / pageData[0].height;
+			pageVerts[j+ 0] = x0;
+			pageVerts[j+ 1] = y0;
+			pageVerts[j+ 2] = x0;
+			pageVerts[j+ 3] = y0;
+			pageVerts[j+ 4] = x1;
+			pageVerts[j+ 5] = y0;
+			pageVerts[j+ 6] = x0;
+			pageVerts[j+ 7] = y1;
+			pageVerts[j+ 8] = x1;
+			pageVerts[j+ 9] = y1;
+			pageVerts[j+10] = x1;
+			pageVerts[j+11] = y1;
+		}
+		gl.bindBuffer(gl.ARRAY_BUFFER, pageBuffer);
+		gl.bufferData(gl.ARRAY_BUFFER, pageVerts, gl.STATIC_DRAW);
+	}
+
+	function requestFile(filename, cb, rtype) {
+        var req = new XMLHttpRequest();
+        req.open("GET", uncached(filename), true);
+        req.onload = cb;
+        if (rtype) {
+        	req.responseType = rtype;
+        }
+        req.send(null);
+	}
+	
+	function setupAttribute(prog, name) {
+		if (prog.attributes == null) {
+			prog.attributes = {};
+		}
+		var loc = gl.getAttribLocation(prog, name);
+		if (loc == -1) {
+			log("Failed to get location for attribute " + name);
+			return;
+		}
+		prog.attributes[name] = loc;
+	}
+
+	function enableAttributes(prog) {
+		for (var a in prog.attributes) {
+			gl.enableVertexAttribArray(prog.attributes[a])
+		}
+	}
+
+	function disableAttributes(prog) {
+		for (var a in prog.attributes) {
+			gl.disableVertexAttribArray(prog.attributes[a]);
+		}
+	}
+
+	function setupUniform(prog, name) {
+		if (prog.uniforms == null) {
+			prog.uniforms = {};
+		}
+
+		var loc = gl.getUniformLocation(prog, name);
+		if (loc == -1) {
+			log("Failed to get location for uniform " + name);
+			return;
+		}
+		prog.uniforms[name] = loc;		
+	}
+
+	function unpackBmp(buf) {
+		// TODO: endian issues
+		var iarr = new Uint16Array(buf, 18, 4);
+		return {buf: buf.slice(54), width: iarr[0], height: iarr[2]};
+	}
+	
+	function processAtlas() {
+		var data = unpackBmp(this.response);
+		var arrayView = new Uint8Array(data.buf);
+		atlasTexture = gl.createTexture();
+		atlasTexture.width = data.width;
+		atlasTexture.height = data.height;
+		gl.bindTexture(gl.TEXTURE_2D, atlasTexture);
+		gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+		gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+		//gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+		gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, atlasTexture.width, atlasTexture.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, arrayView);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+		gl.bindTexture(gl.TEXTURE_2D, null);
+		log("Loaded atlas: " + atlasTexture.width + " x " + atlasTexture.height);
+	}
+
+	function copyVertex(dstArray, dstIndex, srcArray, srcIndex) {
+		// dstAray and srcArray should both be Int16Array 
+		for (var j=0; j<int16PerVertex; j++) {
+			dstArray[dstIndex*int16PerVertex+j] = srcArray[srcIndex*int16PerVertex+j];
+		}
+	}
+	
+	function transposeBytes(buf, innerDim) {
+		var inputArray = new Uint8Array(buf);
+		var outputArray = new Uint8Array(inputArray.length);
+
+		var outerDim = inputArray.length / innerDim;
+
+		for (var i=0; i<innerDim; i++) {
+			for (var j=0; j<outerDim; j++) {
+				outputArray[j * innerDim + i] = inputArray[i * outerDim + j];
+			}
+		}
+
+		return outputArray.buffer;
+	}
+
+	function transposeBuffer(buf, innerDim) {
+		var inputArray = new Uint16Array(buf);
+		var outputArray = new Uint16Array(inputArray.length);
+
+		var outerDim = inputArray.length / innerDim;
+
+		for (var i=0; i<innerDim; i++) {
+			for (var j=0; j<outerDim; j++) {
+				outputArray[j * innerDim + i] = inputArray[i * outerDim + j];
+			}
+		}
+
+		return outputArray.buffer;
+	}
+
+	var positions = {x:[], y:[]};		// for auto zoom
+
+	function deltaDecodePositions(buf) {
+		var p = new Int16Array(buf);
+		var q = new Uint16Array(buf);
+
+		positions.x[0] = q[0]/65535.0;
+		positions.y[0] = q[numVerts]/65535.0;
+		var numVerts = p.length / int16PerVertex;
+		for (var i=1; i<numVerts; i++) {
+			p[i] += p[i-1];
+			p[i+numVerts] += p[i+numVerts-1];
+			positions.x[i] = q[i]/65535.0;
+			positions.y[i] = q[i+numVerts]/65535.0;
+		}
+	}
+
+	function boxesIntersect(a, b) {
+		return a.x0 < b.x1 && a.y0 < b.y1 && a.x1 > b.x0 && a.y1 > b.y0;
+	}
+
+	function processVertexResponse() {
+		var buf = unpackBmp(this.response).buf;
+		deltaDecodePositions(buf);
+		var vertBuffer = transposeBuffer(buf, int16PerVertex);
+
+		var int16Array = new Int16Array(vertBuffer);
+
+		log('Loaded ' + (int16Array.length / int16PerVertex / 4) + ' glyphs');
+
+		vertexCount = int16Array.length / int16PerVertex;
+		
+		// Convert vertex data to tri strip of quads with 1st and 4th vertex repeated
+		var stripVertBuffer = new ArrayBuffer(vertBuffer.byteLength / 4 * 6);		// 4 verts per quad gets expanded from 4 to 6 with degen verts
+		var stripArray = new Int16Array(stripVertBuffer);
+		
+		for (var quadIndex = 0; quadIndex < vertexCount / 4; quadIndex++) {
+			var i = quadIndex * 4;		// input:  4 vertices per quad
+			var o = quadIndex * 6;		// output: 6 vertices per quad
+			
+			// Copy degenerate first vertex of quad
+			copyVertex(stripArray, o, int16Array, i);
+			
+			// Copy first 4 verts of quad
+			copyVertex(stripArray, o+1, int16Array, i+0);
+			copyVertex(stripArray, o+2, int16Array, i+1);
+			copyVertex(stripArray, o+3, int16Array, i+2);
+			copyVertex(stripArray, o+4, int16Array, i+3);
+			
+			// Repeat 4th vertex in output
+			copyVertex(stripArray, o+5, int16Array, i+3);
+		}
+		
+		
+		glyphBuffer = gl.createBuffer();
+		gl.bindBuffer(gl.ARRAY_BUFFER, glyphBuffer);
+		gl.bufferData(gl.ARRAY_BUFFER, stripArray, gl.STATIC_DRAW);
+
+		// Update vert count with expanded vertex count
+		vertexCount = stripArray.length / int16PerVertex;
+	}
+
+	function processImageVertices() {
+		var buf = unpackBmp(this.response).buf;
+		imageBuffer = gl.createBuffer();
+		gl.bindBuffer(imageBuffer);
+		gl.bufferData(gl.ARRAY_BUFFER, buf, gl.STATIC_DRAW);
+		console.log("Loaded image vertex buffer");
+	}
+	
+	function setCanvasSize() {
+		//return;
+		var devicePixelRatio = window.devicePixelRatio || 1;
+		//var w = Math.round(canvas.clientWidth * devicePixelRatio);
+		//var h = Math.round(canvas.clientHeight * devicePixelRatio);
+		var e = document.getElementById("canvaswrap");
+		var w = Math.round(e.clientWidth * devicePixelRatio);
+		var h = Math.round(e.clientHeight * devicePixelRatio);
+
+		if (canvas.width != w || canvas.height != h) {
+			canvas.width = w;
+			canvas.height = h;
+		}		
+	}
+
+	function drawPage(page, x, y, zoomx, zoomy) {
+		// Shader would have done:
+		//pos = (pos - uTranslate) / uZoom;
+		//So, pos * (1/uZoom) + (-uTranslate/uZoom);
+		var translateX = page.x + x;
+		var translateY = page.y + y;
+
+		var pageNdc = {
+			x0: (0 - translateX) / zoomx * canvas.height / canvas.width,
+			x1: (1 - translateX) / zoomx * canvas.height / canvas.width,
+			y0: (0 - translateY) / zoomy,
+			y1: (1 - translateY) / zoomy,
+		}
+		var viewportNdc = {
+			x0: -1,
+			x1:  1,
+			y0: -1,
+			y1:  1,
+		}
+		if (!boxesIntersect(pageNdc, viewportNdc)) {
+			return;
+		}
+
+
+		gl.uniform2f(glyphProgram.uniforms.uPositionMul, 1/zoomx, 1/zoomy);
+		gl.uniform2f(glyphProgram.uniforms.uPositionAdd, -translateX / zoomx, -translateY / zoomy);
+		gl.drawArrays(gl.TRIANGLE_STRIP, page.beginVertex / 4 * 6, (page.endVertex - page.beginVertex) / 4 * 6);
+	}
+	
+	function computePageLocations() {
+		var cols = Math.floor(Math.sqrt(pageData.length / canvas.height * canvas.width / pageData[0].width * pageData[0].height));
+
+		for (var i=0; i<pageData.length; i++) {
+			var page = pageData[i];
+			page.x = -(i % cols);
+			page.y = Math.floor(i / cols);
+
+			var gap = 1.02;
+			page.x *= gap;
+			page.y *= gap;
+		}		
+
+	}
+
+	var lastAutoChange = -1e6;
+
+	function drawScene(timestamp) {
+
+		if (glyphProgram == null || !vertexCount || !pageData || !atlasTexture) {
+			return;
+		}
+		var firstFrame = document.getElementById("loadinginfo").style.visibility != "hidden";
+		if (firstFrame) {
+			document.getElementById("loadinginfo").style.visibility = "hidden";
+			canvas.style.display = "block";	// force reflow on ios
+		}
+
+		var zoomx = Math.pow(2, animTransform.zoom);
+		var zoomy = zoomx * pageData[0].width / pageData[0].height;
+
+		var autoPan = document.getElementById("autopan").checked;
+		if (autoPan) {
+			var interval = 8000;
+			if (timestamp - lastAutoChange > interval) {
+				lastAutoChange = timestamp;
+				var page = pageData[Math.floor(Math.random() * pageData.length)];
+				var glyph = Math.floor(Math.random() * (page.endVertex - page.beginVertex)) + page.beginVertex;
+				glyph = Math.floor(glyph/4)*4;
+				var x = 0.5 * (positions.x[glyph] + positions.x[glyph+3]);
+				var y = 0.5 * (positions.y[glyph] + positions.y[glyph+3]);
+
+				transform.x = -page.x + x;
+				transform.y = -page.y + 1.0 - y;
+			}
+			var t = (timestamp - lastAutoChange) / interval;
+			var steps = 11;
+			//t = Math.min(1, steps/(steps-1)*t);
+			//t = Math.floor(t*steps)/steps;
+			transform.zoom = 0.5-6*t;
+			transform.zoom = Math.cos(Math.acos(0)*t*4);
+			transform.zoom = Math.pow(transform.zoom+1, 3)/1.1-7;
+		}
+
+		if (!updateAnimations(timestamp) && !firstFrame && !renderRequired) {
+			return;
+		}
+		renderRequired = false;
+
+		setCanvasSize();
+		gl.viewport(0, 0, canvas.width, canvas.height);
+		gl.clear(gl.COLOR_BUFFER_BIT);
+
+		if (timerQuery) {
+			if (waitingForTimer) {
+				var available = glext.getQueryObjectEXT(timerQuery, glext.QUERY_RESULT_AVAILABLE_EXT);
+				var disjoint = gl.getParameter(glext.GPU_DISJOINT_EXT);
+				if (available) {
+					if (lastFrametime == null || timestamp - lastFrametime > 100) {
+						lastFrametime = timestamp;
+						var elapsed = glext.getQueryObjectEXT(timerQuery, glext.QUERY_RESULT_EXT);
+						document.getElementById("frametime").value = elapsed/1e6;
+					}
+					waitingForTimer = false;
+				}
+			}
+
+			if (!waitingForTimer) {
+				glext.beginQueryEXT(glext.TIME_ELAPSED_EXT, timerQuery);
+			}
+		}
+
+
+		// Draw page backgrounds
+		gl.useProgram(pageProgram);
+		gl.disable(gl.BLEND);
+		gl.uniform2f(pageProgram.uniforms.uCanvasSize, canvas.width, canvas.height);
+		gl.uniform2f(pageProgram.uniforms.uPositionMul, 1/zoomx, 1/zoomy);
+		gl.uniform2f(pageProgram.uniforms.uPositionAdd, -animTransform.x / zoomx, -animTransform.y / zoomy);
+		gl.bindBuffer(gl.ARRAY_BUFFER, pageBuffer);
+		enableAttributes(pageProgram);
+		gl.vertexAttribPointer(pageProgram.attributes.aPosition, 2, gl.FLOAT, false, 0, 0);
+		gl.drawArrays(gl.TRIANGLE_STRIP, 0, pageData.length * 6);
+		disableAttributes(pageProgram);
+
+		// Draw glyphs
+		gl.useProgram(glyphProgram);
+		gl.bindBuffer(gl.ARRAY_BUFFER, glyphBuffer);
+		gl.enable(gl.BLEND);
+		
+		enableAttributes(glyphProgram);
+		gl.vertexAttribPointer(glyphProgram.attributes.aPosition,  2, gl.UNSIGNED_SHORT, true, int16PerVertex*2,  0);
+		gl.vertexAttribPointer(glyphProgram.attributes.aCurvesMin, 2, gl.UNSIGNED_SHORT, false, int16PerVertex*2, 2*2);
+		gl.vertexAttribPointer(glyphProgram.attributes.aColor,     4, gl.UNSIGNED_BYTE,  true, int16PerVertex*2,  4*2);
+		
+		gl.activeTexture(gl.TEXTURE0);
+		gl.bindTexture(gl.TEXTURE_2D, atlasTexture);
+		gl.uniform1i(glyphProgram.uniforms.uAtlasSampler, 0);
+			
+		gl.uniform2f(glyphProgram.uniforms.uTexelSize, 1/atlasTexture.width, 1/atlasTexture.height);
+		gl.uniform2f(glyphProgram.uniforms.uCanvasSize, canvas.width, canvas.height);
+		gl.uniform1i(glyphProgram.uniforms.uShowGrids, document.getElementById("showgrids").checked ? 1 : 0);
+
+		// Draw page contents
+		for (var i=0; i<pageData.length; i++) {
+			drawPage(pageData[i], animTransform.x, animTransform.y, zoomx, zoomy);
+		}		
+		disableAttributes(glyphProgram);
+
+		if (timerQuery && !waitingForTimer) {
+			glext.endQueryEXT(glext.TIME_ELAPSED_EXT);
+			waitingForTimer = true;
+		}
+	}
+	
+	function tick(timestamp) {
+		requestAnimationFrame(tick);
+		drawScene(timestamp);
+	}
+	
+	function canvasMouseEnter(e) {
+		this.lastX = e.clientX;
+		this.lastY = e.clientY;
+	}
+	
+		
+	var prevPinchDiff = -1;
+	function canvasTouchStart(e) {
+		var touch = e.targetTouches[0];
+		this.lastX = touch.clientX;
+		this.lastY = touch.clientY;
+		this.primaryTouchId = touch.identifier;
+		prevPinchDiff = -1;
+	}
+
+	function handlePinch(ev) {
+		var touches = ev.targetTouches;
+
+		if (touches.length == 2) {
+		 	var dx = touches[0].clientX - touches[1].clientX;
+		 	var dy = touches[0].clientY - touches[1].clientY;
+
+		 	var curDiff = Math.sqrt(dx*dx + dy*dy);
+
+		 	if (prevPinchDiff > 0) {
+				transform.zoom -= (curDiff - prevPinchDiff) / 80;
+				finishAnimations();
+			}
+			prevPinchDiff = curDiff;
+		}
+	}
+
+
+	function canvasTouchMove(e) {
+		var touch = e.targetTouches[0];
+
+
+		if (e.targetTouches.length > 1) {
+			handlePinch(e);
+		} else {
+			if (this.primaryTouchId != touch.identifier) {
+				this.lastX = touch.clientX;
+				this.lastY = touch.clientY;
+				this.primaryTouchId = touch.identifier;
+			}
+	 
+			if (e.altKey) {
+				var dx = touch.clientX - this.lastX;
+				var dy = touch.clientY - this.lastY;
+				var dmax = Math.abs(dx) > Math.abs(dy) ? -dx : dy;
+				transform.zoom += 7.0 * (dmax / this.offsetHeight);	
+			} else {
+				var scaleFactor = 4;
+				transform.x -= scaleFactor * ((touch.clientX - this.lastX) / this.offsetWidth) * Math.pow(2, transform.zoom);
+				transform.y += scaleFactor * ((touch.clientY - this.lastY) / this.offsetHeight) * Math.pow(2, transform.zoom);
+			}
+			
+			finishAnimations();
+		}
+
+		this.lastX = touch.clientX;
+		this.lastY = touch.clientY;
+
+		e.preventDefault();
+	}
+
+	function canvasMouseMove(e) {
+		if (e.buttons) {
+			if (e.altKey || e.button == 2 || e.buttons == 2) {
+				var dx = e.clientX - this.lastX;
+				var dy = e.clientY - this.lastY;
+				var dmax = Math.abs(dx) > Math.abs(dy) ? -dx : dy;
+				transform.zoom += 7.0 * (dmax / this.offsetHeight);	
+			} else {
+				var scaleFactor = 5.5;
+				transform.x -= scaleFactor * ((e.clientX - this.lastX) / this.offsetWidth) * Math.pow(2, transform.zoom);
+				transform.y += scaleFactor * ((e.clientY - this.lastY) / this.offsetHeight) * Math.pow(2, transform.zoom);
+			}
+		}
+
+		this.lastX = e.clientX;
+		this.lastY = e.clientY;
+	}
+	
+	function canvasMouseWheel(e) {
+		var amt = e.deltaY;
+		if (e.deltaMode == 1) amt *= 30;
+		if (e.deltaMode == 2) amt *= 1000;
+		transform.zoom += amt / 200;
+		e.preventDefault();
+	}
+	
+
+	function fullscreen() {
+		var e = document.getElementById("canvaswrap")
+		if (e.requestFullscreen) {
+			e.requestFullscreen();
+		} else if (e.webkitRequestFullScreen) {
+			e.webkitRequestFullScreen();
+		} else if (e.mozRequestFullScreen) {
+			e.mozRequestFullScreen();
+		} else if (canvas.msRequestFullscreen) {
+			e.msRequestFullscreen();
+		}
+
+		forceRender();
+	}
+	
+	function uncached(s) {
+		if (document.location.hostname == "localhost") {
+			return s + "?" + Math.random();
+		}
+		return s;
+	}
+
+	//var lzvert = [];
+
+	function initShaders() {
+		requestFile('font.frag', processFragmentShader);
+		requestFile('web.vert', processVertexShader);
+	}
+
+	function webGlStart() {
+		if (window.navigator.userAgent.indexOf("Trident") >= 0 || window.navigator.userAgent.indexOf("Edge") >= 0) {
+			log("The shader is currently very slow to compile on Microsoft browsers. Hold tight..");
+		}
+
+		canvas = document.getElementById("beziercanvas");
+		canvas.addEventListener("touchmove", canvasTouchMove);
+		canvas.addEventListener("touchstart", canvasTouchStart);
+		canvas.addEventListener("mousemove", canvasMouseMove);
+		canvas.addEventListener("mouseenter", canvasMouseEnter);
+		canvas.addEventListener("wheel", canvasMouseWheel);
+		canvas.addEventListener("contextmenu", function(e) {e.preventDefault()}, false);
+		
+		window.addEventListener("resize", forceRender);
+
+		initGl();
+		log("Loading files...");
+		requestFile("vertices.bmp", processVertexResponse, "arraybuffer");
+		requestFile("atlas.bmp", processAtlas, "arraybuffer");
+		requestFile('pages.json', processPageData);
+		//requestFile('imagevertices.bmp', processImageVertices, "arraybuffer");
+		initShaders();
+
+		//requestFile("vertices.bmp.lzma", function() { console.log("got lzma ", this.response.byteLength); lzvert = this.response}, "arraybuffer");
+
+		initPageShader();
+				
+		tick();
+
+		if (document.location.hostname == "localhost") {
+			document.getElementById("reloadbutton").style.display = "inline-block";
+		}
+	}
+/*
+(function(){var script=document.createElement('script');script.onload=function(){var stats=new Stats();stats.domElement.style.cssText='position:fixed;left:0;top:0;z-index:10000';document.body.appendChild(stats.domElement);requestAnimationFrame(function loop(){stats.update();requestAnimationFrame(loop)});};script.src='//rawgit.com/mrdoob/stats.js/master/build/stats.min.js';document.head.appendChild(script);})()
+*/
+	
+</script>
+</head>
+<body onload="webGlStart()">
+<div id="canvaswrap"><canvas id="beziercanvas"></canvas></div>
+<div id="toolbar">
+<a href="/post/gpu-text-rendering-with-vector-textures/">Resolution independent GPU text rendering</a>
+<p><a href="http://www.agner.org/optimize/optimizing_cpp.pdf">Original PDF</a>
+<p>Drag to pan, right mouse (or alt) drag to zoom</p>
+<label><input type="checkbox" checked id="autopan">Auto zoom</label>
+<label><input type="checkbox" id="showgrids" onchange="forceRender()">Grids</label>
+<input type="button" id="fsbutton" value="Fullscreen" onclick="fullscreen()">
+<input type="button" value="Reload Shaders" onclick="initShaders(); forceRender();" style="display: none" id="reloadbutton">
+<input id="frametime" style="display: none">
+</div>
+<div id="loadinginfo"></div>
+</body>
+</html>
+
