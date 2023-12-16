@@ -60,23 +60,12 @@ struct vecdata_ {
 // Pointer to the last element of the vector
 #define vlast(x) ((x) + vlen(x) - 1)
 
-// push(x, ...) but basically for strings
-// #define vpushs(x, y) memcpy((char*)(vpush_((void**)&(x), strlen(y))), (y), strlen(y))
-// vpushs(data, "hello"); expands to something like: memcpy((char*)(vpush_((void**) &data, strlen("hello"))), "hello", strlen("hello"));
-
-// The generic push macro, does not work :sob: pls find a way to make it work
-// #define vpush(x, ...) _Generic((x), char*: memcpy((char*)(vpush_((void**)&(x), strlen(__VA_ARGS__))), __VA_ARGS__, strlen(__VA_ARGS__)),/*\*/
-// 	default: (*(typeof(x))vpush_((void**)&(x), sizeof(*(x))) = (typeof(*x)) __VA_ARGS__))
-
-// The variadic push macro, still in the works
-// #define vpush(x, ...) (memcpy(vpush_((void**) &(x), sizeof((typeof(x)) { __VA_ARGS__ })), (typeof(x)) { __VA_ARGS__ }, sizeof((typeof(x)) { __VA_ARGS__ })))
-// expands to: memcpy((int*)vpush_((void*) &data, 4), (((*data))[]) {5}, sizeof(((*data)[]) {5}));
-
 // V String that has length info and is automatically push-able
 typedef char* vstr;
 
 // All you need to get started with this vector lib!
 void* vnew();
+// #define vnew() ((void*) ((struct vecdata_*) calloc(1, sizeof(struct vecdata_)) + 1))
 
 // Returns a *new* concatenated vector, use `pushv` if you don't want a new vec :D
 void* vcat(void* a, void* b);
@@ -154,10 +143,7 @@ void vclear_(void** v) {
 	data->used = 0;
 }
 
-void vempty(void* v) {
-	_DATA(v)->used = 0;
-}
-
+void vempty(void* v) { _DATA(v)->used = 0; }
 void vfree(void* v) { free(_DATA(v)); }
 
 
