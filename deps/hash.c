@@ -158,14 +158,14 @@ void* htget(struct GENERIC_TABLE_* t, void* k, uint ksize, bool str) {
 		switch (ksize) {
 		case 4:
 			do {
-				if (*(unsigned int*) item->k == *(unsigned int*) k)
+				if (*(uint*) item->k == *(uint*) k)
 					return item->v;
 				else item = item->next;
 			} while (item != NULL);
 			break;
 		case 8:
 			do {
-				if (*(unsigned long*) item->k == *(unsigned long*) k)
+				if (*(uint64_t*) item->k == *(uint64_t*) k)
 					return item->v;
 				else item = item->next;
 			} while (item != NULL);
@@ -198,14 +198,14 @@ void* htset(struct GENERIC_TABLE_* t, void* k, uint ksize, uint vsize, bool str)
 		switch (ksize) {
 		case 4:
 			do {
-				if (*(unsigned int*) item->k == *(unsigned int*) k)
+				if (*(uint*) item->k == *(uint*) k)
 					return item->v = realloc(item->v, vsize);
 				else last = item, item = item->next;
 			} while (item != NULL);
 			break;
 		case 8:
 			do {
-				if (*(unsigned long*) item->k == *(unsigned long*) k)
+				if (*(uint64_t*) item->k == *(uint64_t*) k)
 					return item->v = realloc(item->v, vsize);
 				else last = item, item = item->next;
 			} while (item != NULL);
