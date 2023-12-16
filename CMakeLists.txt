@@ -2,7 +2,8 @@ cmake_minimum_required(VERSION 3.21)
 
 include(FetchContent)
 find_package(OpenGL REQUIRED)
-message("x${CMAKE_C_SIMULATE_ID} x${CMAKE_CXX_SIMULATE_ID} x${CMAKE_HIP_SIMULATE_ID}")
+project(2dgfx C CXX)
+
 #- GLFW ---------------------------------------------------------------------
 
 FetchContent_Declare(
@@ -44,7 +45,6 @@ FetchContent_Declare(
 FetchContent_GetProperties(stb)
 if(NOT stb_POPULATED)
     FetchContent_Populate(stb)
-    message("Fetching stb")
 
     add_library(stb_image INTERFACE ${stb_SOURCE_DIR}/stb_image.h)
     target_include_directories(stb_image INTERFACE ${stb_SOURCE_DIR})
@@ -66,14 +66,15 @@ endif()
 
 # --------------------
 
-
-project(2dgfx C)
-
 set(CMAKE_C_STANDARD 23)
 # set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE INTERNAL "")
 if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
         set(CMAKE_EXE_LINKER_FLAGS /NODEFAULTLIB:msvcrt.lib /NODEFAULTLIB:libcmtd.lib /NODEFAULTLIB:msvcrtd.lib)
+        add_compile_definitions(/DTRACY_ENABLE)
+else()
+        add_compile_definitions(-DTRACY_ENABLE)
 endif()
+
 
 include_directories(. ./deps/include ./lib)
 link_directories(./deps/lib)
@@ -82,6 +83,7 @@ link_directories(./deps/lib)
 add_executable(graphics
         deps/hash.c
         deps/hashfunc.c
+        deps/extern/tracy/TracyClient.cpp
         lib/2dgfx.c
         main.c)
 

@@ -40,7 +40,14 @@
 			"cmakeCommandArgs": "",
 			"buildCommandArgs": "",
 			"ctestCommandArgs": "",
-			"inheritEnvironments": [ "clang_cl_x64_x64" ]
+			"inheritEnvironments": [ "clang_cl_x64_x64" ],
+			"variables": [
+				{
+					"name": "CMAKE_CXX_COMPILER",
+					"value": "C:/PROGRAM FILES/MICROSOFT VISUAL STUDIO/2022/COMMUNITY/VC/Tools/Llvm/x64/bin/clang-cl.exe",
+					"type": "STRING"
+				}
+			]
 		},
 		{
 			"name": "x64-Clang-Release",
