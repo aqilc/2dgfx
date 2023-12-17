@@ -175,16 +175,9 @@ typedef double f64;
 	u32    tracy_current_query = 0;
 	u32    tracy_last_submitted_query = 0;
 	#define TRACY_GPU_ZONE_START(zone_name) \
-		const struct ___tracy_source_location_data TracyConcat(__tracy_gpu_source_location, __LINE__) = {\
-			.name = zone_name,\
-			.function = __func__,\
-			.line = (uint32_t) __LINE__,\
-			.file = __FILE__,\
-			.color = 0\
-		};\
 		glQueryCounter(tracy_query_ids[tracy_current_query], GL_TIMESTAMP);\
 		___tracy_emit_gpu_zone_begin_alloc_callstack((const struct ___tracy_gpu_zone_begin_callstack_data) {\
-			.srcloc = (u64) &TracyConcat(__tracy_gpu_source_location, __LINE__)/*___tracy_alloc_srcloc(__LINE__, __FILE__, sizeof(__FILE__)-1, __func__, sizeof(__func__) - 1)*/,\
+			.srcloc = ___tracy_alloc_srcloc_name(__LINE__, __FILE__, sizeof(__FILE__)-1, __func__, sizeof(__func__) - 1, zone_name, sizeof(zone_name) - 1),\
 			.depth = TRACY_CALLSTACK_DEPTH,\
 			.queryId = tracy_current_query,\
 			.context = 1\
@@ -271,6 +264,7 @@ typedef double f64;
 typedef struct gfx_texture       gfx_texture;
 typedef struct gfx_texture_atlas gfx_texture_atlas;
 typedef struct gfx_atlas_node    gfx_atlas_node;
+typedef struct gfx_atlas_added   gfx_atlas_added;
 typedef struct gfx_typeface      gfx_typeface;
 typedef struct gfx_drawbuf       gfx_drawbuf;
 typedef struct gfx_vertexbuf     gfx_vertexbuf;
@@ -1019,6 +1013,7 @@ static inline u32 gfx_atlas_new(GLenum format) {
 	});
 	vpush(ctx->atlases, {
 		.added = vnew(),
+		.layers = 1,
 		.gltex = vlen(ctx->gl.gltexes) - 1,
 		.size = { GFX_ATLAS_START_SIZE, GFX_ATLAS_START_SIZE },
 		.atlas_trees = atlas_trees,
@@ -1196,6 +1191,10 @@ static inline void gfx_tex_upload(u32 gltex, gfx_vector size, u32 layers) {
 static inline void gfx_tex_update(u32 gltex, gfx_vector size, u32 layers) {
 	TRACY_GPU_ZONE_START("texupdate")
 	gfx_gl_texture* t = ctx->gl.gltexes + gltex;
+	
+	if(t->slot < 0) gfx_new_tex_slot(gltex);
+	else glActiveTexture(GL_TEXTURE0 + t->slot);
+	
 	glPixelStorei(GL_UNPACK_ALIGNMENT, gfx_glsizeof(t->format));
 	if(layers <= 1)
 		glTexImage2D(GL_TEXTURE_2D, 0, t->format, size.w, size.h, 0, t->format, GL_UNSIGNED_BYTE, t->buf);
@@ -1256,7 +1255,7 @@ static inline FT_ULong gfx_readutf8(u8** str) {
 	return code_point;
 }
 
-static inline gfx_char* gfx_loadfontchar(typeface tf, FT_ULong c) {
+static gfx_char* gfx_loadfontchar(typeface tf, FT_ULong c) {
 	TRACY_ZONE_START()
 	gfx_typeface* face = ctx->fonts.store + tf;
 	CHECK_CALL(FT_Set_Pixel_Sizes(face->face, 0, ctx->fonts.size * 4.0f / 3.0f), return NULL, "Couldn't set size");
@@ -1333,19 +1332,38 @@ static inline void drawtext() {
 	TRACY_ZONE_START()
 	TRACY_GPU_ZONE_START("drawtext")
 	for(u32 i = 0; i < vlen(ctx->atlases); i ++) {
-		gfx_gl_texture* gtex = ctx->gl.gltexes + ctx->atlases[i].gltex;
+		gfx_texture_atlas* atlas = ctx->atlases + i;
+		gfx_gl_texture* gtex = ctx->gl.gltexes + atlas->gltex;
 		if(!vlen(gtex->drawbuf.idx)) continue;
 		if(!gtex->id)
-			gfx_tex_upload(ctx->atlases[i].gltex, ctx->atlases[i].size, vlen(ctx->atlases[i].atlas_trees) - 1);
-		else if (vlen(ctx->atlases[i].added)) {
-			if(vlen(ctx->atlases[i].added) <= 10) {
-				for(int i = 0; i < vlen(ctx->atlases[i].added); i ++) {
-					
+			gfx_tex_upload(atlas->gltex, atlas->size, atlas->layers);
+		else if (vlen(atlas->added)) {
+			if(vlen(atlas->added) <= 20) {
+				if(gtex->slot < 0) gfx_new_tex_slot(atlas->gltex);
+				else glActiveTexture(GL_TEXTURE0 + gtex->slot);
+
+				gfx_atlas_added* added = atlas->added;
+				u32 maxbufsize = added->size.w * added->size.h;
+				u8* buf = malloc(maxbufsize * gfx_glsizeof(gtex->format));
+				
+				for(int i = 0; i < vlen(added); i ++) {
+					if(added[i].size.w * added[i].size.h > maxbufsize) {
+						maxbufsize = added[i].size.w * added[i].size.h;
+						buf = realloc(buf, maxbufsize * gfx_glsizeof(gtex->format));
+					}
+
+					u8* srcbuf = gtex->buf + atlas->size.w * added[i].place.y + added[i].place.x;
+					for(u32 i = 0; i < added[i].size.h; i ++)
+						memcpy(buf + i * added[i].size.w, srcbuf + atlas->size.w * i, added[i].size.w);
+
+					glTexSubImage2D(GL_TEXTURE_2D, 0, added[i].place.x, added[i].place.y, added[i].size.w, added[i].size.h, gtex->format, gtex->format, buf);
 				}
+				free(buf);
 			}
-			else gfx_tex_update(ctx->atlases[i].gltex, ctx->atlases[i].size, vlen(ctx->atlases[i].atlas_trees) - 1);
-		} else if(gtex->slot < 0) gfx_new_tex_slot(ctx->atlases[i].gltex);
-		gfx_setcurtex(ctx->atlases[i].gltex);
+			else gfx_tex_update(atlas->gltex, atlas->size, atlas->layers);
+			vempty(atlas->added);
+		} else if(gtex->slot < 0) gfx_new_tex_slot(atlas->gltex);
+		gfx_setcurtex(atlas->gltex);
 
 		if(gtex->format == GL_RED)
 			gfx_useti("u_shape", TEXT);
