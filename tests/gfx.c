@@ -16,7 +16,7 @@ TEST("load image") {
 }
 
 TEST("disregard") {
-	glClear(GL_COLOR_BUFFER_BIT);
+	gfx_nextframe();
 }
 
 TEST("rectangle") {

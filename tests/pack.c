@@ -3,6 +3,7 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
+#define VEC_H_IMPLEMENTATION
 #include <vec.h>
 #include <hash.h>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -253,7 +254,7 @@ TEST("Load some characters") {
 }
 
 TEST("Write bitmap to disk") {
-	stbi_write_png("bitmap.png", face->tex->size.w, face->tex->size.h, 1, face->tex->tex, face->tex->size.w);
+	stbi_write_png("out/bitmap.png", face->tex->size.w, face->tex->size.h, 1, face->tex->tex, face->tex->size.w);
 }
 
 #include "tests_end.h"
