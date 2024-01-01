@@ -7,11 +7,40 @@
  *     #define VEC_H_IMPLEMENTATION
  *     #include <vec.h>
  *
- * WARNING: CURRENTLY NOT THREAD SAFE. Use with caution when using in thread safe code!
+ * Options provided by defines:
+ *     VEC_H_CALLOC:
+ *       Name for user-provided calloc(size_t, size_t) function.
+ *     VEC_H_REALLOC:
+ *       Name for user-provided realloc(void*, size_t) function.
+ *     VEC_H_FREE:
+ *       Name for user-provided free(void*) function.
+ *     VEC_H_OVERLOAD_ALLOCATORS:
+ *       Define `void* vnew()` as you see fit, but after initial allocation, cast to struct vecdata_* and add 1 to pointer as done in current implementation.
+ *       Define re-allocator function with the function signature: struct vecdata_* name(struct vecdata_* data, uint32_t size);
+ *       Make sure to define VEC_H_REALLOC_FUNC with `name` after redefining.
+ *     
+ * WARNING: CURRENTLY NOT FULLY THREAD SAFE. Use with caution when using in thread safe code!
  */
 
 #ifndef VEC_H
 #define VEC_H
+
+
+#if !defined VEC_H_FREE || !defined VEC_H_REALLOC || !defined VEC_H_CALLOC
+	#include <stdlib.h>
+#endif
+
+#ifndef VEC_H_CALLOC
+	#define VEC_H_CALLOC calloc
+#endif
+
+#ifndef VEC_H_REALLOC
+	#define VEC_H_REALLOC realloc
+#endif
+
+#ifndef VEC_H_FREE
+	#define VEC_H_FREE free
+#endif
 
 // #include <stdlib.h>
 #include <stdint.h>
@@ -76,8 +105,7 @@ char vcmp(void* a, void* b);
 
 // Initialize a vector with a string straight away
 char* strtov(char* s);
-void vclear_(void** v);
-void vempty(void* v);
+void  vempty(void* v);
 char* vtostr_(void** v);
 void  vremove_(void* v, uint32_t size, uint32_t pos);
 void* vpush_(void** v, uint32_t size);
@@ -94,23 +122,25 @@ char* vfmt(char* str, ...);
 
 #ifdef VEC_H_IMPLEMENTATION
 
-#include <stdlib.h>
 #include <stdarg.h>
 #include <stdio.h>
 
 char* fmtstr;
 
-// Callocs a vec with a cap of 8 so subsequent pushes don't immediately trigger reallocation.
-void* vnew() {
-	struct vecdata_* v = calloc(1, sizeof(struct vecdata_) + 16 * sizeof(char));
-	v->cap = 16;
-	return v + 1;
-}
+#ifndef VEC_H_OVERLOAD_ALLOCATORS
+	// Callocs a vec with a cap of 16 so subsequent pushes don't immediately trigger reallocation.
+	void* vnew() {
+		struct vecdata_* v = VEC_H_CALLOC(1, sizeof(struct vecdata_) + 16 * sizeof(char));
+		v->cap = 16;
+		return v + 1;
+	}
+#endif
 
-// Combines two vectors into a new vector (USE THIS FOR STRING VECS INSTEAD OF _PUSHS PLS I BEG)
+// Combines two vectors into a new vector
 void* vcat(void* a, void* b) {
-	void* v = vnew();
-	vpush_(&v, ((struct vecdata_*) b)->used + ((struct vecdata_*) a)->used);
+	struct vecdata_* v = VEC_H_CALLOC(1, ((struct vecdata_*) b)->used + ((struct vecdata_*) a)->used + sizeof(struct vecdata_));
+	v->cap = v->used = ((struct vecdata_*) b)->used + ((struct vecdata_*) a)->used;
+	v += 1;
 	memcpy(v, a, _DATA(a)->used);
 	memcpy((char*) v + _DATA(a)->used, b, _DATA(b)->used);
 	return v;
@@ -125,9 +155,12 @@ char vcmp(void* a, void* b) {
 }
 
 char* strtov(char* s) {
-	char* v = vnew();
-	vpushs_((void**) &v, s);
-	return v;
+	uint32_t len = strlen(s);
+	struct vecdata_* v = VEC_H_CALLOC(1, len + sizeof(struct vecdata_));
+	v->used = v->cap = len;
+	v += 1;
+	memcpy(v, s, len);
+	return (char*) v;
 }
 
 char* vtostr_(void** v) {
@@ -136,30 +169,29 @@ char* vtostr_(void** v) {
 	return *v;
 }
 
-void vclear_(void** v) {
-	struct vecdata_* data = realloc((struct vecdata_*) *v - 1, sizeof(struct vecdata_));
-	*v = data + 1;
-	data->cap = 0;
-	data->used = 0;
-}
-
 void vempty(void* v) { _DATA(v)->used = 0; }
-void vfree(void* v) { free(_DATA(v)); }
+void vfree(void* v) { VEC_H_FREE(_DATA(v)); }
 
 
 // Reallocs more size for the array, hopefully without moves o.o
-static inline void* alloc_(struct vecdata_* data, uint32_t size) {
-	data->used += size;
-	if(data->cap < data->used) {
-		data->cap = data->used + (data->used >> 2) + 16;
-		return (struct vecdata_*)realloc(data, sizeof(struct vecdata_) + data->cap) + 1;
+#ifndef VEC_H_OVERLOAD_ALLOCATORS
+	#define VEC_H_REALLOC_FUNC alloc_
+	static inline void* alloc_(struct vecdata_* data, uint32_t size) {
+		data->used += size;
+		if(data->cap < data->used) {
+			data->cap = data->used + (data->used >> 2) + 16;
+			return (struct vecdata_*)VEC_H_REALLOC(data, sizeof(struct vecdata_) + data->cap) + 1;
+		}
+		return data + 1;
 	}
-	return data + 1;
-}
+#elif !defined VEC_H_REALLOC_FUNC
+	#error "Need to define re-allocator for the Vector library before implementation."
+#endif
+
 
 // Pushes more data onto the array, CAN CHANGE THE PTR U PASS INTO IT
 static inline void* vpush__(void** v, uint32_t size) {
-	struct vecdata_* data = _DATA(*v = alloc_(_DATA(*v), size));
+	struct vecdata_* data = _DATA(*v = VEC_H_REALLOC_FUNC(_DATA(*v), size));
 	return data->data + data->used - size;
 }
 void* vpush_(void** v, uint32_t size) { return vpush__(v, size); }
