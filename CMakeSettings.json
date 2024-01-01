@@ -27,6 +27,21 @@
 					"name": "CMAKE_CXX_COMPILER",
 					"value": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe",
 					"type": "STRING"
+				},
+				{
+					"name": "CMAKE_C_FLAGS",
+					"value": "--target=amd64-pc-windows-msvc -fdiagnostics-absolute-paths  /DWIN32 /D_WINDOWS",
+					"type": "STRING"
+				},
+				{
+					"name": "CMAKE_CXX_FLAGS",
+					"value": "--target=amd64-pc-windows-msvc -fdiagnostics-absolute-paths  /DWIN32 /D_WINDOWS /W3 /GR /EHsc",
+					"type": "STRING"
+				},
+				{
+					"name": "CMAKE_C_COMPILER",
+					"value": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe",
+					"type": "FILEPATH"
 				}
 			],
 			"intelliSenseMode": "windows-clang-x64"
@@ -46,6 +61,11 @@
 					"name": "CMAKE_CXX_COMPILER",
 					"value": "C:/PROGRAM FILES/MICROSOFT VISUAL STUDIO/2022/COMMUNITY/VC/Tools/Llvm/x64/bin/clang-cl.exe",
 					"type": "STRING"
+				},
+				{
+					"name": "CMAKE_C_COMPILER",
+					"value": "C:/PROGRAM FILES/MICROSOFT VISUAL STUDIO/2022/COMMUNITY/VC/Tools/Llvm/x64/bin/clang-cl.exe",
+					"type": "FILEPATH"
 				}
 			]
 		},
@@ -59,6 +79,50 @@
 			"buildCommandArgs": "",
 			"ctestCommandArgs": "",
 			"inheritEnvironments": [ "clang_cl_x64_x64" ]
+		},
+		{
+			"name": "x64-Clang-asan",
+			"generator": "Ninja",
+			"configurationType": "RelWithDebInfo",
+			"buildRoot": "${projectDir}\\out\\build\\${name}",
+			"installRoot": "${projectDir}\\out\\install\\${name}",
+			"cmakeCommandArgs": "",
+			"buildCommandArgs": "",
+			"ctestCommandArgs": "",
+			"inheritEnvironments": [ "clang_cl_x64_x64" ],
+			"variables": [
+				{
+					"name": "CMAKE_CXX_COMPILER",
+					"value": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe",
+					"type": "STRING"
+				},
+				{
+					"name": "CMAKE_C_FLAGS",
+					"value": "--target=amd64-pc-windows-msvc -fdiagnostics-absolute-paths  /DWIN32 /D_WINDOWS",
+					"type": "STRING"
+				},
+				{
+					"name": "CMAKE_CXX_FLAGS",
+					"value": "--target=amd64-pc-windows-msvc -fdiagnostics-absolute-paths  /DWIN32 /D_WINDOWS /W3 /GR /EHsc",
+					"type": "STRING"
+				},
+				{
+					"name": "CMAKE_C_COMPILER",
+					"value": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe",
+					"type": "FILEPATH"
+				},
+				{
+					"name": "CMAKE_C_FLAGS_RELWITHDEBINFO",
+					"value": "/Zi /O2 /Ob1 /DNDEBUG /fsanitize=address",
+					"type": "STRING"
+				},
+				{
+					"name": "CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO",
+					"value": "/debug /INCREMENTAL",
+					"type": "STRING"
+				}
+			],
+			"intelliSenseMode": "windows-clang-x64"
 		}
 	]
 }

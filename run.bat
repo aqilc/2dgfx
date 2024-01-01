@@ -15,8 +15,8 @@ rem :compile
 mkdir bin
 rem set c=clang-cl --target=i386-pc-win32 /c /MD /EHsc /O2 /D_CRT_SECURE_NO_WARNINGS /I"./deps/include/" /I"./lib/" /Fo"./bin/" main.c
 rem set c=clang-cl --target=i386-pc-win32 /c /MDd /Z7 /EHsc /Od /D_CRT_SECURE_NO_WARNINGS /I"./deps/include/" /I"./lib/" /Fo"./bin/" main.c
-set c=clang-cl --target=i386-pc-win32 /c /MD /Z7 /EHsc /O2 /DTRACY_ENABLE /D_CRT_SECURE_NO_WARNINGS /I"./deps/include/" /I"./lib/" /Fo"./bin/" .\deps\extern\tracy\TracyClient.cpp main.c
-rem set c=clang-cl --target=i386-pc-win32 /c /MD /Z7 /EHsc /O2 /D_CRT_SECURE_NO_WARNINGS /I"./deps/include/" /I"./lib/" /Fo"./bin/" main.c
+rem set c=clang-cl --target=i386-pc-win32 /c /MD /Z7 /EHsc /O2 /DTRACY_ENABLE /D_CRT_SECURE_NO_WARNINGS /I"./deps/include/" /I"./lib/" /Fo"./bin/" .\deps\extern\tracy\TracyClient.cpp main.c
+set c=clang-cl --target=i386-pc-win32 /c /MD /Z7 /EHsc /O2 /D_CRT_SECURE_NO_WARNINGS /I"./deps/include/" /I"./lib/" /Fo"./bin/" main.c
 rem for /f "tokens=*" %%F in ('dir /b /a:-d "*.c"') do call set c=%%c%% "%%F"
 for /f "tokens=*" %%F in ('dir /b /a:-d ".\deps\*.c"') do call set c=%%c%% ".\deps\%%F"
 for /f "tokens=*" %%F in ('dir /b /a:-d ".\lib\*.c"') do call set c=%%c%% ".\lib\%%F"

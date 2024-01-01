@@ -3,10 +3,23 @@
 		- Simplified, faster, less binding.
 		- Cannot support OpenGL ES, requires 4.5-4.6.
 		- Used like vulkan: https://developer.nvidia.com/opengl-vulkan
+		- https://registry.khronos.org/OpenGL-Refpages/gl4/html/glCopyImageSubData.xhtml
+
+	OTHER UI RENDERERS:
+		egui: https://github.com/emilk/egui/blob/master/crates/epaint/src/tessellator.rs
+		nanogui: https://github.com/mitsuba-renderer/nanogui/blob/master/src/renderpass_gl.cpp
+		tgfx: https://github.com/Tencent/tgfx
+
+	DRAWING WITHOUT A WINDOW FOR OFFSCREEN GPU ACCELERATION:
+		https://community.khronos.org/t/offscreen-rendering-without-a-window/57842/2
+		https://stackoverflow.com/questions/2896879/windowless-opengl
+		https://stackoverflow.com/a/48947103/10013227
 		
 	DEBUGGING RESOURCES:
 	- https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/getting-started-with-windbg#summary-of-commands
 	- https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/commands
+	- https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/application-verifier
+	- https://stackoverflow.com/questions/47711390/address-sanitizer-like-functionality-on-msvc
 	
 	TODO:
 		Next: Global Text Atlas
@@ -23,6 +36,7 @@
 		- Clipping
 			- [ ] push()
 			- [ ] clip(x, y, w, h)
+			- https://en.wikipedia.org/wiki/Sutherland%E2%80%93Hodgman_algorithm
 			- Ideas:
 				- I might just be checking if points are going out of the current rectangle and change them to be inside.
 					push() would have to start its own draw buffer for that, and there would be a need to handle buffer heirarchy and state for them.
@@ -56,6 +70,7 @@
 			- [ ] Glyph based loading and rendering.
 			- [ ] Font Fallbacks
 				- gfx_register_fallbacks(int num, { "fallback1", "fallback2" })
+			- [ ] Libature Integration (https://github.com/lite-xl/lite-xl/blob/f837c83e552a45773a2371370855c4b1f8395f9b/src/renderer.c#L127)
 			- Side Projects:
 				- [ ] SDF Based font renderer [IF POSSIBLE, there are way too many drawbacks for it to be an option right NOW].
 				- [ ] Not using Freetype, but rendering fonts natively.
@@ -94,9 +109,11 @@
 
 #include "2dgfx.h"
 
+#define FLOAT_PRECION_BASED_MAX 16777215.0f
+
 #define GFX_STR(...) #__VA_ARGS__
 #define GFX_STR_MACRO(...) GFX_STR(__VA_ARGS__)
-#define GLSL(...) "#version 430 core\n" #__VA_ARGS__
+#define GLSL(...) "#version 330 core\n" #__VA_ARGS__
 
 
 // Batch rendering macros
@@ -119,7 +136,7 @@ typedef double f64;
 
 #define GFX_DEBUG
 #ifdef GFX_DEBUG
-	#define TRACY_ENABLE
+	// #define TRACY_ENABLE
 	#include <stdarg.h>
 	#define STB_IMAGE_WRITE_IMPLEMENTATION
 	#include <stb/stb_image_write.h>
@@ -157,40 +174,42 @@ typedef double f64;
 #endif
 
 
-#ifdef TRACY_ENABLE
-	#include <vec.h>
+#if defined TRACY_ENABLE
 
 	// https://luxeengine.com/integrating-tracy-profiler-in-cpp/
+	// https://github.com/wolfpld/tracy/blob/master/public/tracy/TracyOpenGL.hpp
+	// https://github.com/wolfpld/tracy/blob/cc3cbfe6f2a99d776e8f8642878cc16809bee078/public/client/TracyProfiler.cpp#L4311
 	#include "../deps/extern/tracy/tracy/TracyC.h"
 	
-	#define TRACY_CALLSTACK_DEPTH 7
+	#define PROFILER_CALLSTACK_DEPTH 7
 	
 	TracyCZoneCtx zone;
-	#define TRACY_CALL(...) __VA_ARGS__;
-	#define TRACY_ZONE_START() TracyCZoneS(tracy_ctx, TRACY_CALLSTACK_DEPTH, 1)
-	#define TRACY_ZONE_END() TracyCZoneEnd(tracy_ctx)
+	// #define PROFILER_CALL(...) __VA_ARGS__;
+	#define PROFILER_FRAME_MARK() TracyCFrameMark;
+	#define PROFILER_ZONE_START() TracyCZoneS(tracy_ctx, PROFILER_CALLSTACK_DEPTH, 1)
+	#define PROFILER_ZONE_END() TracyCZoneEnd(tracy_ctx)
 
-	#define TRACY_QUERY_ID_COUNT 65536
-	GLuint tracy_query_ids[TRACY_QUERY_ID_COUNT];
+	#define PROFILER_QUERY_ID_COUNT 65536
+	GLuint tracy_query_ids[PROFILER_QUERY_ID_COUNT];
 	u32    tracy_current_query = 0;
 	u32    tracy_last_submitted_query = 0;
-	#define TRACY_GPU_ZONE_START(zone_name) \
+	#define PROFILER_GPU_ZONE_START(zone_name) \
 		glQueryCounter(tracy_query_ids[tracy_current_query], GL_TIMESTAMP);\
 		___tracy_emit_gpu_zone_begin_alloc_callstack((const struct ___tracy_gpu_zone_begin_callstack_data) {\
 			.srcloc = ___tracy_alloc_srcloc_name(__LINE__, __FILE__, sizeof(__FILE__)-1, __func__, sizeof(__func__) - 1, zone_name, sizeof(zone_name) - 1),\
-			.depth = TRACY_CALLSTACK_DEPTH,\
+			.depth = PROFILER_CALLSTACK_DEPTH,\
 			.queryId = tracy_current_query,\
 			.context = 1\
 		});\
-		tracy_current_query = (tracy_current_query + 1) % TRACY_QUERY_ID_COUNT;
-	#define TRACY_GPU_ZONE_END() \
+		tracy_current_query = (tracy_current_query + 1) % PROFILER_QUERY_ID_COUNT;
+	#define PROFILER_GPU_ZONE_END() \
 		glQueryCounter(tracy_query_ids[tracy_current_query], GL_TIMESTAMP);\
 		___tracy_emit_gpu_zone_end((const struct ___tracy_gpu_zone_end_data) {\
 			.queryId = tracy_current_query,\
 			.context = 1\
 		});\
-		tracy_current_query = (tracy_current_query + 1) % TRACY_QUERY_ID_COUNT;
-	#define TRACY_GPU_QUERIES_COLLECT() \
+		tracy_current_query = (tracy_current_query + 1) % PROFILER_QUERY_ID_COUNT;
+	#define PROFILER_GPU_QUERIES_COLLECT() \
 		while (tracy_last_submitted_query != tracy_current_query) {\
 			GLint tracy_query_available = 0;\
 			glGetQueryObjectiv(tracy_query_ids[tracy_last_submitted_query], GL_QUERY_RESULT_AVAILABLE, &tracy_query_available);\
@@ -202,60 +221,69 @@ typedef double f64;
 				.queryId = tracy_last_submitted_query,\
 				.context = 1\
 			});\
-			tracy_last_submitted_query = (tracy_last_submitted_query + 1) % TRACY_QUERY_ID_COUNT;\
+			tracy_last_submitted_query = (tracy_last_submitted_query + 1) % PROFILER_QUERY_ID_COUNT;\
 		}
+	#define PROFILER_GPU_OPENGL_INIT() \
+		glGenQueries(PROFILER_QUERY_ID_COUNT, tracy_query_ids);\
+		i64 gputime;\
+		glGetInteger64v(GL_TIMESTAMP, &gputime);\
+		___tracy_emit_gpu_new_context((const struct ___tracy_gpu_new_context_data) {\
+			.gpuTime = gputime,\
+			.period = 1.f,\
+			.context = 1 /*idfk at this point*/,\
+			.type = 1 /*Tracy::GpuContextType::OpenGL*/,\
+			.flags = 0\
+		});
 
-	void* vnew() {
-		struct vecdata_* v = calloc(1, sizeof(struct vecdata_) + 16 * sizeof(char));
-		TracyCAlloc(v, sizeof(struct vecdata_) + 16 * sizeof(char));
-		v->cap = 16;
-		return v + 1;
+	void* tracy_malloc(size_t s) {
+		void* ret = malloc(s);
+		TracyCAlloc(ret, s)
+		return ret;
 	}
-	// Reallocs more size for the array, hopefully without moves o.o
-	static inline void* alloc_(struct vecdata_* data, uint32_t size) {
-		data->used += size;
-		if(data->cap < data->used) {
-			data->cap = data->used + (data->used >> 2) + 16;
-			struct vecdata_* ret = realloc(data, sizeof(struct vecdata_) + data->cap);
-			if(ret != data) {
-				TracyCFree(data);
-				TracyCAlloc(ret, sizeof(struct vecdata_) + data->cap);
-			}
-			return ret + 1;
+	void* tracy_calloc(size_t n, size_t s) {
+		void* ret = calloc(n, s);
+		TracyCAlloc(ret, n * s);
+		return ret;
+	}
+	void* tracy_realloc(void* ptr, size_t s) {
+		void* prev = ptr;
+		void* ret = realloc(ptr, s);
+		if(prev != ret) {
+			TracyCFree(prev)
+			TracyCAlloc(ret, s)
 		}
-		return data + 1;
+		return ret;
 	}
-	void* vpush_(void** v, uint32_t size) {
-		struct vecdata_* data = _DATA(*v = alloc_(_DATA(*v), size));
-		return data->data + data->used - size;
+	void tracy_free(void* ptr) {
+		TracyCFree(ptr);
+		free(ptr);
 	}
-	void vempty(void* v) { _DATA(v)->used = 0; }
 	
-	char* fmtstr;
-	char* vfmt(char* str, ...) {
-		if(!fmtstr) fmtstr = vnew();
-		
-		va_list args;
-		va_start(args, str);
-		va_list args2;
-		va_start(args2, str);
-		uint32_t len = vsnprintf(NULL, 0, str, args) + 1;
-		if(len - _DATA(fmtstr)->used > 0)
-			vpush_((void**) &fmtstr, len - _DATA(fmtstr)->used);
-		vsnprintf(fmtstr, len, str, args2);
-		va_end(args);
-		va_end(args2);
-		return fmtstr;
-	}
+	#define VEC_H_CALLOC tracy_calloc
+	#define VEC_H_REALLOC tracy_realloc
+	#define VEC_H_FREE tracy_free
+	
+	#define VEC_H_IMPLEMENTATION
+	#include <vec.h>
+	
+	#define GFX_MALLOC tracy_malloc
+	#define GFX_CALLOC tracy_calloc
+	#define GFX_REALLOC tracy_realloc
+	#define GFX_FREE tracy_free
 #else
 	#define VEC_H_IMPLEMENTATION
 	#include <vec.h>
-	#define TRACY_CALL(...) 
-	#define TRACY_ZONE_START() 
-	#define TRACY_ZONE_END() 
-	#define TRACY_GPU_ZONE_START(name) 
-	#define TRACY_GPU_ZONE_END() 
-	#define TRACY_GPU_QUERIES_COLLECT() 
+	// #define PROFILER_CALL(...) 
+	#define PROFILER_FRAME_MARK() 
+	#define PROFILER_ZONE_START() 
+	#define PROFILER_ZONE_END() 
+	#define PROFILER_GPU_OPENGL_INIT() 
+	#define PROFILER_GPU_ZONE_START(name) 
+	#define PROFILER_GPU_ZONE_END() 
+	#define PROFILER_GPU_QUERIES_COLLECT() 
+	#define GFX_CALLOC calloc
+	#define GFX_MALLOC malloc
+	#define GFX_REALLOC realloc
 #endif
 
 
@@ -311,6 +339,7 @@ struct gfx_ctx {
 	GLFWwindow* window; // GLFW Window
 	u32 width, height;
 	vec4 curcol;        // Current color
+	vec4 stroke;        // Current stroke
 	u32 slots;          // Array of length 32 of booleans for slots(OpenGL only supports 32).
 	float z;            // Current "z-index"
 	
@@ -409,6 +438,7 @@ static struct {
 	const char* frag;
 } default_shaders = {
 	.vert = GLSL(
+		// CGLSLSTART
 		precision mediump float;
 		layout (location = 0) in vec4 pos;
 		layout (location = 1) in vec2 uv;
@@ -417,10 +447,15 @@ static struct {
 
 		uniform mat4 u_mvp;
 
-		layout(location = 0) out vec2 v_uv;
-		layout(location = 1) out vec4 v_col;
-		layout(location = 2) out vec2 v_pos;
-		layout(location = 3) out float v_idx;
+		// layout(location = 0) out vec2 v_uv;
+		// layout(location = 1) out vec4 v_col;
+		// layout(location = 2) out vec2 v_pos;
+		// layout(location = 3) out float v_idx;
+
+		out vec2 v_uv;
+		out vec4 v_col;
+		out vec2 v_pos;
+		out float v_idx;
 
 		void main() {
 			gl_Position = u_mvp * pos;
@@ -429,51 +464,60 @@ static struct {
 			v_col = col;
 			v_idx = idx;
 		}
+		// CGLSLEND
 	),
 
 	.frag = GLSL(
+		// CGLSLSTART
 		precision mediump float;
 		layout (location = 0) out vec4 color;
 
-		layout(location = 0) in vec2 v_uv;
-		layout(location = 1) in vec4 v_col;
-		layout(location = 2) in vec2 v_pos;
-		layout(location = 3) in float v_idx;
+		// layout(location = 0) in vec2 v_uv;
+		// layout(location = 1) in vec4 v_col;
+		// layout(location = 2) in vec2 v_pos;
+		// layout(location = 3) in float v_idx;
+		in vec2 v_uv;
+		in vec4 v_col;
+		in vec2 v_pos;
+		in float v_idx;
 
 		uniform sampler2D u_tex;
 		uniform int u_shape;
 
 		vec4 text;
 
-		const float BayerMatrixDim = 8.0;
-		float Bayer_matrix[8][8] = {
-				{0.0/65.0, 32.0/65.0, 8.0/65.0, 40.0/65.0, 2.0/65.0, 34.0/65.0, 10.0/65.0, 42.0/65.0},
-				{48.0/65.0, 16.0/65.0, 56.0/65.0, 24.0/65.0, 50.0/65.0, 18.0/65.0, 58.0/65.0, 26.0/65.0},
-				{12.0/65.0, 44.0/65.0, 4.0/65.0, 36.0/65.0, 14.0/65.0, 46.0/65.0, 6.0/65.0, 38.0/65.0},
-				{60.0/65.0, 28.0/65.0, 52.0/65.0, 20.0/65.0, 62.0/65.0, 30.0/65.0, 54.0/65.0, 22.0/65.0},
-				{3.0/65.0, 35.0/65.0, 11.0/65.0, 43.0/65.0, 1.0/65.0, 33.0/65.0, 9.0/65.0, 41.0/65.0},
-				{51.0/65.0, 19.0/65.0, 59.0/65.0, 27.0/65.0, 49.0/65.0, 17.0/65.0, 57.0/65.0, 25.0/65.0},
-				{15.0/65.0, 47.0/65.0, 7.0/65.0, 39.0/65.0, 13.0/65.0, 45.0/65.0, 5.0/65.0, 37.0/65.0},
-				{63.0/65.0, 31.0/65.0, 55.0/65.0, 23.0/65.0, 61.0/65.0, 29.0/65.0, 53.0/65.0, 21.0/65.0}
-		};
+		// const float BayerMatrixDim = 8.0;
+		// float Bayer_matrix[8][8] = {
+		// 		{0.0/65.0, 32.0/65.0, 8.0/65.0, 40.0/65.0, 2.0/65.0, 34.0/65.0, 10.0/65.0, 42.0/65.0},
+		// 		{48.0/65.0, 16.0/65.0, 56.0/65.0, 24.0/65.0, 50.0/65.0, 18.0/65.0, 58.0/65.0, 26.0/65.0},
+		// 		{12.0/65.0, 44.0/65.0, 4.0/65.0, 36.0/65.0, 14.0/65.0, 46.0/65.0, 6.0/65.0, 38.0/65.0},
+		// 		{60.0/65.0, 28.0/65.0, 52.0/65.0, 20.0/65.0, 62.0/65.0, 30.0/65.0, 54.0/65.0, 22.0/65.0},
+		// 		{3.0/65.0, 35.0/65.0, 11.0/65.0, 43.0/65.0, 1.0/65.0, 33.0/65.0, 9.0/65.0, 41.0/65.0},
+		// 		{51.0/65.0, 19.0/65.0, 59.0/65.0, 27.0/65.0, 49.0/65.0, 17.0/65.0, 57.0/65.0, 25.0/65.0},
+		// 		{15.0/65.0, 47.0/65.0, 7.0/65.0, 39.0/65.0, 13.0/65.0, 45.0/65.0, 5.0/65.0, 37.0/65.0},
+		// 		{63.0/65.0, 31.0/65.0, 55.0/65.0, 23.0/65.0, 61.0/65.0, 29.0/65.0, 53.0/65.0, 21.0/65.0}
+		// };
 
 		void main() {
 			if(v_uv.x < 0) {
 				color = v_col; // Shape rendering
+				return;
 			}
-			else if(u_shape == 0) {
-				color = vec4(v_col.rgb, texture(u_tex, v_uv).r * v_col.a); // Text rendering
+			text = texture(u_tex, v_uv);
+			if(u_shape == 0) {
+				color = vec4(v_col.rgb, text.r * v_col.a); // Text rendering
 			}
 			else {
-				text = texture(u_tex, v_uv);
 				color = vec4(text.rgb, text.a * v_col.a); // Image rendering
 			}
 
-			uvec2 viewPortPosition = uvec2(gl_FragCoord.xy);
-			if(color.a <= (Bayer_matrix[viewPortPosition.x % 8][viewPortPosition.y % 8])) {
+			// uvec2 viewPortPosition = uvec2(gl_FragCoord.xy);
+			// if(color.a <= (Bayer_matrix[viewPortPosition.x % 8][viewPortPosition.y % 8])) {
+			if(color.a <= .1) {
 				discard;
 			}
 		}
+		// CGLSLEND
 	)
 };
 
@@ -522,7 +566,7 @@ static inline GLuint gfx_compshader(GLenum type, const char* src) {
 			glGetShaderiv(id, GL_INFO_LOG_LENGTH, &length);
 			char* message = "";
 			if (length) {
-				message = malloc(length * sizeof(char));
+				message = GFX_MALLOC(length * sizeof(char));
 				glGetShaderInfoLog(id, length, &length, message);
 			}
 			error("Failed to compile %s shader!\n%s\n", (type == GL_VERTEX_SHADER ? "vertex" : "fragment"), message);
@@ -629,6 +673,13 @@ static inline struct gfx_atlas_node* gfx_atlas_insert(u32 atlas, u32 layer, u32 
 // Aligns to the next multiple of a, where a is a power of 2
 static inline u32 gfx_align(u32 n, u32 a) { return (n + a - 1) & ~(a - 1); }
 
+static inline u32 gfx_totalarea(gfx_atlas_added* boxes /* Vector<gfx_atlas_added> */) {
+	u32 total = 0;
+	for(u32 i = 0; i < vlen(boxes); i ++)
+		total += boxes[i].size.w * boxes[i].size.h;
+	return total;
+}
+
 static size_t gfx_read(char* file, char** (*buf)) {
 	FILE *fp = fopen(file, "rb");
 	#ifdef GFX_DEBUG
@@ -643,7 +694,7 @@ static size_t gfx_read(char* file, char** (*buf)) {
 	size_t len = ftell(fp);
 	rewind(fp);
 	
-	*(*buf) = malloc(len * sizeof(char) + 1);
+	*(*buf) = GFX_MALLOC(len * sizeof(char) + 1);
 	*(*buf)[len] = '\0';
 	fread((*buf), 1, len, fp);
 	fclose(fp);
@@ -688,7 +739,7 @@ gfx_vector gfx_screen_dims() {
 void gfx_updatescreencoords(u32 width, u32 height) {
 	ctx->width = width; ctx->height = height;
 	mat4x4_identity(ctx->transform.screen);
-	mat4x4_ortho(ctx->transform.screen, .0f, (f32) width, (f32) height, .0f, -1.0f, 1.f);
+	mat4x4_ortho(ctx->transform.screen, .0f, (f32) width, (f32) height, .0f, -1.0f, 1.0f);
 	gfx_usetm4("u_mvp", ctx->transform.screen);
 }
 
@@ -742,9 +793,9 @@ struct gfx_ctx* gfx_init(const char* title, u32 w, u32 h) {
 	// glfwWindowHint(GLFW_DECORATED, GL_FALSE);
 	// glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, GL_TRUE);
 	glfwWindowHint(GLFW_SAMPLES, 4);
-	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 	glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
 	DEBUG_MODE(glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE))
 
@@ -766,18 +817,7 @@ struct gfx_ctx* gfx_init(const char* title, u32 w, u32 h) {
 	GLenum err;
 	CHECK_CALL((err = glewInit()), glfwTerminate(); return NULL, "GLEW initialization failed: %s", glewGetErrorString(err));
 	
-	TRACY_CALL(
-		glGenQueries(TRACY_QUERY_ID_COUNT, tracy_query_ids);
-		i64 gputime;
-		glGetInteger64v(GL_TIMESTAMP, &gputime);
-		___tracy_emit_gpu_new_context((const struct ___tracy_gpu_new_context_data) {
-			.gpuTime = gputime,
-			.period = 1.f,
-			.context = 1 /*idfk at this point*/,
-			.type = 1 /*Tracy::GpuContextType::OpenGL*/,
-			.flags = 0
-		});
-	)
+	PROFILER_GPU_OPENGL_INIT()
 
 	// Debug callback for detecting OpenGL errors
 	DEBUG_MODE(glDebugMessageCallback(glDebugMessageHandler, NULL))
@@ -790,7 +830,7 @@ struct gfx_ctx* gfx_init(const char* title, u32 w, u32 h) {
 	glEnable(GL_DEPTH_TEST);
 	
 	// Fills application context struct
-	struct gfx_ctx* ctx = calloc(1, sizeof(struct gfx_ctx));
+	struct gfx_ctx* ctx = GFX_CALLOC(1, sizeof(struct gfx_ctx));
 	ctx->gl.progid = gfx_shaderprog(default_shaders.vert, default_shaders.frag);
 	glGenVertexArrays(1, &ctx->gl.varrid);
 	ctx->textures = vnew();
@@ -816,27 +856,32 @@ struct gfx_ctx* gfx_init(const char* title, u32 w, u32 h) {
 }
 
 bool gfx_nextframe() {
-	TRACY_CALL(TracyCFrameMark)
-	TRACY_ZONE_START()
+	PROFILER_FRAME_MARK()
+	PROFILER_ZONE_START()
 	glfwPollEvents();
-	TRACY_GPU_QUERIES_COLLECT()
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	ctx->frame.count ++;
 	ctx->frame.start = glfwGetTime();
 	ctx->frame.delta = ctx->frame.start - ctx->frame.last;
 	ctx->frame.last  = ctx->frame.start;
 
-	TRACY_ZONE_END()
-	return !glfwWindowShouldClose(ctx->window);
+	PROFILER_ZONE_END()
+	if (glfwWindowShouldClose(ctx->window)) {
+		PROFILER_GPU_QUERIES_COLLECT()
+		return false;
+	} else return true;
 }
 void gfx_frameend() {
-	TRACY_ZONE_START()
-	TRACY_GPU_ZONE_START("frameend")
-	if(vlen(ctx->gl.gltexes[ctx->curdrawbuf].drawbuf.shp)) drawtext();
+	PROFILER_ZONE_START()
+	PROFILER_GPU_ZONE_START("frameend")
+	drawtext();
 	ctx->z = -1.0f;
 	glfwSwapBuffers(ctx->window);
-	TRACY_GPU_ZONE_END()
-	TRACY_ZONE_END()
+	PROFILER_GPU_ZONE_END()
+	if(ctx->frame.count % 500 == 0) {
+		PROFILER_GPU_QUERIES_COLLECT()
+	}
+	PROFILER_ZONE_END()
 }
 
 void gfx_close() {
@@ -877,8 +922,8 @@ double gfx_fps() {
 // -------------------------------------- Graphics Functions --------------------------------------
 
 static inline void draw() {
-	TRACY_ZONE_START()
-	TRACY_GPU_ZONE_START("draw")
+	PROFILER_ZONE_START()
+	PROFILER_GPU_ZONE_START("draw")
 	gfx_gl_texture* tex = ctx->gl.gltexes + ctx->curdrawbuf;
 	gfx_drawbuf* dbuf = &tex->drawbuf;
 	u32 slen = vlen(dbuf->shp);
@@ -917,8 +962,8 @@ static inline void draw() {
 	// Reset draw buffers and Z axis
 	vempty(dbuf->shp);
 	vempty(dbuf->idx);
-	TRACY_GPU_ZONE_END()
-	TRACY_ZONE_END()
+	PROFILER_GPU_ZONE_END()
+	PROFILER_ZONE_END()
 }
 
 
@@ -931,10 +976,10 @@ void fill(u8 r, u8 g, u8 b, u8 a) {
 }
 
 void quad(int x1, int y1, int x2, int y2, int x3, int y3, int x4, int y4) {
-	TRACY_ZONE_START()
+	PROFILER_ZONE_START()
 	gfx_drawbuf* dbuf = &ctx->gl.gltexes[ctx->curdrawbuf].drawbuf;
 	u32 curidx = vlen(dbuf->shp);
-	ctx->z += .001f;
+	ctx->z += 1.0f / FLOAT_PRECION_BASED_MAX;
 	vpusharr(dbuf->idx, { curidx, curidx + 1, curidx + 2, curidx + 2, curidx, curidx + 3 });
 	vpusharr(dbuf->shp, {
 		{ .p = { (f32) x1, (f32) y1 }, .z = ctx->z, .tp = { -1.f, -1.f }, .index = 0, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } },
@@ -942,15 +987,27 @@ void quad(int x1, int y1, int x2, int y2, int x3, int y3, int x4, int y4) {
 		{ .p = { (f32) x3, (f32) y3 }, .z = ctx->z, .tp = { -1.f, -1.f }, .index = 0, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } },
 		{ .p = { (f32) x4, (f32) y4 }, .z = ctx->z, .tp = { -1.f, -1.f }, .index = 0, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } }
 	});
-	TRACY_ZONE_END()
+	PROFILER_ZONE_END()
 }
 
 void rect(int x, int y, int w, int h) {
 	quad(x, y, x + w, y, x + w, y + h, x, y + h);
 }
 
+void background(u8 r, u8 g, u8 b, u8 a) {
+	float tmp[4] = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] };
+	fill(r, g, b, a);
+	rect(0, 0, ctx->width, ctx->height);
+	ctx->curcol[0] = tmp[0];
+	ctx->curcol[1] = tmp[1];
+	ctx->curcol[2] = tmp[2];
+	ctx->curcol[3] = tmp[3];
+}
 
 
+void circle(int x, int y, int w, int h) {
+	
+}
 
 
 
@@ -1009,7 +1066,7 @@ static inline u32 gfx_atlas_new(GLenum format) {
 			.shp = vnew(),
 			.idx = vnew()
 		},
-		.buf = malloc(GFX_ATLAS_START_SIZE * GFX_ATLAS_START_SIZE * gfx_glsizeof(format))
+		.buf = GFX_MALLOC(GFX_ATLAS_START_SIZE * GFX_ATLAS_START_SIZE * gfx_glsizeof(format))
 	});
 	vpush(ctx->atlases, {
 		.added = vnew(),
@@ -1049,9 +1106,10 @@ static inline u32 gfx_atlases_add(GLenum format, gfx_vector* size, gfx_vector* p
 	cur_atlas --;
 
 	if(growth == 0) {
-		if(vlen(ctx->atlases[cur_atlas].atlas_trees) >= ctx->gl.max_texture_layers)
+		if(vlen(ctx->atlases[cur_atlas].atlas_trees) >= ctx->gl.max_texture_layers) {
 			gfx_atlas_try_push(cur_atlas = gfx_atlas_new(format), (cur_layer = 0), &maybe, size);
-		else {
+			info("Generating new atlas (#%d)", vlen(ctx->atlases));
+		} else {
 			gfx_atlas_node* new_tree = vnew();
 			u32 atlas_trees_last_element = vlen(ctx->atlases[cur_atlas].atlas_trees);
 			vpush(new_tree, { .s = { INT_MAX, INT_MAX } });
@@ -1063,12 +1121,10 @@ static inline u32 gfx_atlases_add(GLenum format, gfx_vector* size, gfx_vector* p
 
 	gfx_texture_atlas* atlas = ctx->atlases + cur_atlas;
 	gfx_gl_texture* tex = ctx->gl.gltexes + ctx->atlases[cur_atlas].gltex;
-	// if(!tex->buf)
-	// 	tex->buf = malloc(atlas->size.w * atlas->size.h * sizeof(u8));
-	// else
+
 	if(growth > 1) {
 		int ow = atlas->size.w / growth, oh = atlas->size.h / growth;
-		u8* ntex = malloc(atlas->size.w * atlas->size.h * sizeof(u8));
+		u8* ntex = GFX_MALLOC(atlas->size.w * atlas->size.h * sizeof(u8));
 		u8* otex = tex->buf;
 		
 		for(int i = 0; i < oh; i ++)
@@ -1157,7 +1213,7 @@ static inline void gfx_new_tex_slot(u32 gltex) {
 }
 
 static inline void gfx_tex_upload(u32 gltex, gfx_vector size, u32 layers) {
-	TRACY_GPU_ZONE_START("texupload")
+	PROFILER_GPU_ZONE_START("texupload")
 	gfx_new_tex_slot(gltex);
 	gfx_gl_texture* t = ctx->gl.gltexes + gltex;
 	glPixelStorei(GL_UNPACK_ALIGNMENT, gfx_glsizeof(t->format));
@@ -1185,11 +1241,11 @@ static inline void gfx_tex_upload(u32 gltex, gfx_vector size, u32 layers) {
 		glTexParameteri(texture_type, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
 		glGenerateMipmap(texture_type); // CALL AFTER UPLOAD
 	}
-	TRACY_GPU_ZONE_END()
+	PROFILER_GPU_ZONE_END()
 }
 
 static inline void gfx_tex_update(u32 gltex, gfx_vector size, u32 layers) {
-	TRACY_GPU_ZONE_START("texupdate")
+	PROFILER_GPU_ZONE_START("texupdate")
 	gfx_gl_texture* t = ctx->gl.gltexes + gltex;
 	
 	if(t->slot < 0) gfx_new_tex_slot(gltex);
@@ -1199,7 +1255,7 @@ static inline void gfx_tex_update(u32 gltex, gfx_vector size, u32 layers) {
 	if(layers <= 1)
 		glTexImage2D(GL_TEXTURE_2D, 0, t->format, size.w, size.h, 0, t->format, GL_UNSIGNED_BYTE, t->buf);
 	else glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, t->format, size.w, size.h, layers, 0, t->format, GL_UNSIGNED_BYTE, t->buf);
-	TRACY_GPU_ZONE_END()
+	PROFILER_GPU_ZONE_END()
 }
 
 img gfx_loadimg(char* file) {
@@ -1211,7 +1267,7 @@ img gfx_loadimg(char* file) {
 
 
 void image(img img, int x, int y, int w, int h) {
-	TRACY_ZONE_START()
+	PROFILER_ZONE_START()
 	if(img < 0) return;
 	gfx_gl_texture* tex = ctx->gl.gltexes + ctx->textures[img].gltex;
 	
@@ -1223,7 +1279,7 @@ void image(img img, int x, int y, int w, int h) {
 	// Creates a rectangle the image will be held on, then uploads the texture coordinates to map to the image
 	rect(x, y, w, h);
 	gfx_tp((float[]) { 0.f, 0.f, 1.f, 0.f, 1.f, 1.f, 0.f, 1.f });
-	TRACY_ZONE_END()
+	PROFILER_ZONE_END()
 }
 
 gfx_vector* isize(img img) { return &ctx->textures[img].size; }
@@ -1256,7 +1312,7 @@ static inline FT_ULong gfx_readutf8(u8** str) {
 }
 
 static gfx_char* gfx_loadfontchar(typeface tf, FT_ULong c) {
-	TRACY_ZONE_START()
+	PROFILER_ZONE_START()
 	gfx_typeface* face = ctx->fonts.store + tf;
 	CHECK_CALL(FT_Set_Pixel_Sizes(face->face, 0, ctx->fonts.size * 4.0f / 3.0f), return NULL, "Couldn't set size");
 	CHECK_CALL(FT_Load_Char(face->face, c, FT_LOAD_RENDER), return NULL, "Couldn't load char '%c' (%X)", c, c);
@@ -1288,7 +1344,7 @@ static gfx_char* gfx_loadfontchar(typeface tf, FT_ULong c) {
 		.atlas = atlas,
 		.layer = (float) layer
 	};
-	TRACY_ZONE_END()
+	PROFILER_ZONE_END()
 	return hlastv(face->chars);
 }
 
@@ -1297,9 +1353,9 @@ static char* default_fallbacks[] = {
 };
 
 typeface gfx_loadfont(const char* file) {
-	TRACY_ZONE_START()
+	PROFILER_ZONE_START()
 	gfx_typeface new = {
-		.name = malloc(strlen(file) + 1),
+		.name = GFX_MALLOC(strlen(file) + 1),
 		.chars = {0},
 		.face = NULL
 	};
@@ -1320,7 +1376,7 @@ typeface gfx_loadfont(const char* file) {
 	// Stores the font
 	vpush(ctx->fonts.store, new);
 	info("Loaded font '%s'", new.name);
-	TRACY_ZONE_END()
+	PROFILER_ZONE_END()
 	return vlen(ctx->fonts.store) - 1;
 }
 
@@ -1329,8 +1385,8 @@ void lineheight(f32 h) { ctx->fonts.lh = h; }
 
 // Draws any leftover shapes and text
 static inline void drawtext() {
-	TRACY_ZONE_START()
-	TRACY_GPU_ZONE_START("drawtext")
+	PROFILER_ZONE_START()
+	PROFILER_GPU_ZONE_START("drawtext")
 	for(u32 i = 0; i < vlen(ctx->atlases); i ++) {
 		gfx_texture_atlas* atlas = ctx->atlases + i;
 		gfx_gl_texture* gtex = ctx->gl.gltexes + atlas->gltex;
@@ -1338,29 +1394,30 @@ static inline void drawtext() {
 		if(!gtex->id)
 			gfx_tex_upload(atlas->gltex, atlas->size, atlas->layers);
 		else if (vlen(atlas->added)) {
-			if(vlen(atlas->added) <= 20) {
+			if(vlen(atlas->added) < 200 && gfx_totalarea(atlas->added) < atlas->size.w * atlas->size.h / 5) {
 				if(gtex->slot < 0) gfx_new_tex_slot(atlas->gltex);
 				else glActiveTexture(GL_TEXTURE0 + gtex->slot);
 
 				gfx_atlas_added* added = atlas->added;
 				u32 maxbufsize = added->size.w * added->size.h;
-				u8* buf = malloc(maxbufsize * gfx_glsizeof(gtex->format));
+				u8* buf = GFX_MALLOC(maxbufsize * gfx_glsizeof(gtex->format));
 				
-				for(int i = 0; i < vlen(added); i ++) {
+				for(u32 i = 0; i < vlen(added); i ++) {
 					if(added[i].size.w * added[i].size.h > maxbufsize) {
 						maxbufsize = added[i].size.w * added[i].size.h;
-						buf = realloc(buf, maxbufsize * gfx_glsizeof(gtex->format));
+						buf = GFX_REALLOC(buf, maxbufsize * gfx_glsizeof(gtex->format));
 					}
 
 					u8* srcbuf = gtex->buf + atlas->size.w * added[i].place.y + added[i].place.x;
-					for(u32 i = 0; i < added[i].size.h; i ++)
-						memcpy(buf + i * added[i].size.w, srcbuf + atlas->size.w * i, added[i].size.w);
+					for(u32 j = 0; j < added[i].size.h; j ++)
+						memcpy(buf + j * added[i].size.w, srcbuf + atlas->size.w * j, added[i].size.w);
 
-					glTexSubImage2D(GL_TEXTURE_2D, 0, added[i].place.x, added[i].place.y, added[i].size.w, added[i].size.h, gtex->format, gtex->format, buf);
+					glTexSubImage2D(GL_TEXTURE_2D, 0, added[i].place.x, added[i].place.y, added[i].size.w, added[i].size.h, gtex->format, GL_UNSIGNED_BYTE, buf);
 				}
 				free(buf);
 			}
 			else gfx_tex_update(atlas->gltex, atlas->size, atlas->layers);
+			stbi_write_png("bitmap.png", atlas->size.w, atlas->size.h, 1, gtex->buf, atlas->size.w);
 			vempty(atlas->added);
 		} else if(gtex->slot < 0) gfx_new_tex_slot(atlas->gltex);
 		gfx_setcurtex(atlas->gltex);
@@ -1383,8 +1440,8 @@ static inline void drawtext() {
 		gfx_useti("u_shape", IMAGE);
 		draw();
 	}
-	TRACY_GPU_ZONE_END()
-	TRACY_ZONE_END()
+	PROFILER_GPU_ZONE_END()
+	PROFILER_ZONE_END()
 }
 void font(typeface face, u32 size) {
 	
@@ -1400,12 +1457,13 @@ void font(typeface face, u32 size) {
 // 	if(size > 0) ctx->fonts.size = size;
 }
 void text(const char* str, int x, int y) {
-	TRACY_ZONE_START()
+	PROFILER_ZONE_START()
+	// PROFILER_CALL(TracyCZoneText(tracy_ctx, str, strlen(str)))
 	if(!vlen(ctx->fonts.store)) return;
 
 	gfx_typeface* face = ctx->fonts.store + ctx->fonts.cur;
 	f32 scale = (f32) ctx->fonts.size * 4.0f / 3.0f /*px -> pts*/ / RENDERING_FONT_SIZE(.0f);
-	ctx->z += .001f;
+	ctx->z += 1.0f / FLOAT_PRECION_BASED_MAX;
 
 	FT_ULong point;
 	f32 curx = x, cury = y; // So we don't have to do so many useless conversions! (profiled - performance bottleneck)
@@ -1454,6 +1512,6 @@ void text(const char* str, int x, int y) {
 		// Advance cursors for next glyph
 		curx += ch->advance;
 	}
-	TRACY_ZONE_END()
+	PROFILER_ZONE_END()
 }
 

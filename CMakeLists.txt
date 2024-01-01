@@ -70,14 +70,16 @@ set(CMAKE_C_STANDARD 23)
 # set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE INTERNAL "")
 if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
         set(CMAKE_EXE_LINKER_FLAGS /NODEFAULTLIB:msvcrt.lib /NODEFAULTLIB:libcmtd.lib /NODEFAULTLIB:msvcrtd.lib)
-        add_compile_definitions(/DTRACY_ENABLE)
+        # add_compile_definitions(/DTRACY_ENABLE)
 else()
-        add_compile_definitions(-DTRACY_ENABLE)
+        # add_compile_definitions(-DTRACY_ENABLE)
 endif()
 
 
 include_directories(. ./deps/include ./lib)
 link_directories(./deps/lib)
+link_libraries(glfw freetype libglew_static stb_image)
+# set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /wholearchive:\"C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.39.33321/lib/x64/clang_rt.asan_dynamic-x86_64.lib\"")
 # link_libraries(freetype.lib glew32s.lib shell32.lib Gdi32.lib user32.lib opengl32.lib glfw3.lib)
 
 add_executable(graphics
@@ -87,7 +89,7 @@ add_executable(graphics
         lib/2dgfx.c
         main.c)
 
-target_link_libraries(graphics PRIVATE glfw freetype libglew_static stb_image)
+# target_link_libraries(graphics-asan PRIVATE glfw freetype libglew_static stb_image)
 
 add_custom_command(TARGET graphics POST_BUILD        # Adds a post-build event to MyTest
     COMMAND ${CMAKE_COMMAND} -E copy_if_different  # which executes "cmake - E copy_if_different..."
