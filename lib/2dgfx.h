@@ -37,6 +37,7 @@ gfx_vector gfx_screen_dims();
 void fill(uint8_t r, uint8_t g, uint8_t b, uint8_t a); // Specify color for the next set of shapes.
 void quad(int x1, int y1, int x2, int y2, int x3, int y3, int x4, int y4); // Quad
 void rect(int x, int y, int w, int h); // Plain Rectangle
+void circle(int x, int y, int r); // Circle!!
 
 // Image drawing commands
 void image(img img, int x, int y, int w, int h); // Draws an image at those coordinates.

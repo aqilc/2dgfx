@@ -8,7 +8,7 @@ TEST("startup") {
 }
 
 TEST("load font") {
-	fon = gfx_loadfont("Roboto-Medium.ttf");
+	fon = gfx_loadfont("roboto.ttf");
 }
 
 TEST("load image") {

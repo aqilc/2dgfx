@@ -73,6 +73,7 @@ void loop() {
   text("AAAAAAAAAAAA YES YOU YOU DON'T DISTORT ANYMOER", 10, 430);
   fontsize(200);
   text("BIG", 50, 300);
+  circle(400, 300, 200);
 
 
   if(gfx_fpschanged())

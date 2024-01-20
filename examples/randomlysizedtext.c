@@ -23,8 +23,8 @@ struct text_particle {
   int size;
   int text;
   float spd;
-  unsigned char col;
-} particles[500];
+  unsigned char col[3];
+} particles[5000];
 
 #define PLEN (sizeof(particles) / sizeof(particles[0]))
 
@@ -34,14 +34,16 @@ void particle_reset(int id, int height) {
   particles[id].pos.y  =  (rand() / (float) RAND_MAX) * (height + 50);
   particles[id].size   =  (rand() / (float) RAND_MAX) * 45 + 5;
   particles[id].text   =  (rand() % MLEN);
-  particles[id].col    =  (rand() / (float) RAND_MAX) * 200 + 55;
+  particles[id].col[0] =  (rand() / (float) RAND_MAX) * 200 + 55;
+  particles[id].col[1] =  (rand() / (float) RAND_MAX) * 200 + 55;
+  particles[id].col[2] =  (rand() / (float) RAND_MAX) * 200 + 55;
 }
 void particles_draw(int width, int height) {
   for(int i = 0; i < PLEN; i ++) {
     if(particles[i].pos.fx > width + 100) particle_reset(i, height);
     particles[i].pos.fx += particles[i].spd;
     fontsize(particles[i].size);
-    fill(particles[i].col, particles[i].col, particles[i].col, 255);
+    fill(particles[i].col[0], particles[i].col[1], particles[i].col[2], 255);
     text(messages[particles[i].text], particles[i].pos.fx, particles[i].pos.y);
   }
 }
@@ -67,6 +69,7 @@ void loop() {
   rect(m.x, m.y, 20, 20);
   fontsize(200);
   text("BIG", 50, 300);
+  // circle(400, 300, 200);
 
 
   if(gfx_fpschanged())

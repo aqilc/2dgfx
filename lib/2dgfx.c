@@ -10,6 +10,11 @@
 		nanogui: https://github.com/mitsuba-renderer/nanogui/blob/master/src/renderpass_gl.cpp
 		tgfx: https://github.com/Tencent/tgfx
 
+	CIRCLES:
+		Produces vertices: https://github.com/grimfang4/sdl-gpu/blob/master/src/renderer_shapes_GL_common.inl#L360
+		Calculates dt, number of points: https://github.com/grimfang4/sdl-gpu/blob/master/src/renderer_shapes_GL_common.inl#L82
+		Uses precomputed sin and cos values: https://github.com/emilk/egui/blob/master/crates/epaint/src/tessellator.rs#L337
+
 	DRAWING WITHOUT A WINDOW FOR OFFSCREEN GPU ACCELERATION:
 		https://community.khronos.org/t/offscreen-rendering-without-a-window/57842/2
 		https://stackoverflow.com/questions/2896879/windowless-opengl
@@ -22,7 +27,9 @@
 	- https://stackoverflow.com/questions/47711390/address-sanitizer-like-functionality-on-msvc
 	
 	TODO:
-		Next: Global Text Atlas
+		Next:
+			- [ ] Front to back drawing
+			- [x] Global Text Atlas
 		Bugs:
 			- [x] While lines when rendering text.
 		- Depth Buffer
@@ -31,6 +38,8 @@
 			- gfx_window()
 		- Shapes
 			- [ ] rrect(x, y, w, h, r)
+			- [x] circle(x, y, r)
+			- [ ] ellipse(x, y, w, h)
 			- [x] rect()
 			- [x] quad()
 		- Clipping
@@ -105,6 +114,7 @@
 #include <stb/stb_image.h>
 
 #include <hash.h>
+#include <math.h>
 #include <linmath.h>
 
 #include "2dgfx.h"
@@ -134,7 +144,7 @@ typedef int64_t i64;
 typedef float f32;
 typedef double f64;
 
-#define GFX_DEBUG
+// #define GFX_DEBUG
 #ifdef GFX_DEBUG
 	// #define TRACY_ENABLE
 	#include <stdarg.h>
@@ -185,9 +195,9 @@ typedef double f64;
 	
 	TracyCZoneCtx zone;
 	// #define PROFILER_CALL(...) __VA_ARGS__;
-	#define PROFILER_FRAME_MARK() TracyCFrameMark;
-	#define PROFILER_ZONE_START() TracyCZoneS(tracy_ctx, PROFILER_CALLSTACK_DEPTH, 1)
-	#define PROFILER_ZONE_END() TracyCZoneEnd(tracy_ctx)
+	#define PROFILER_FRAME_MARK TracyCFrameMark;
+	#define PROFILER_ZONE_START TracyCZoneS(tracy_ctx, PROFILER_CALLSTACK_DEPTH, 1)
+	#define PROFILER_ZONE_END TracyCZoneEnd(tracy_ctx)
 
 	#define PROFILER_QUERY_ID_COUNT 65536
 	GLuint tracy_query_ids[PROFILER_QUERY_ID_COUNT];
@@ -223,29 +233,29 @@ typedef double f64;
 			});\
 			tracy_last_submitted_query = (tracy_last_submitted_query + 1) % PROFILER_QUERY_ID_COUNT;\
 		}
-	#define PROFILER_GPU_OPENGL_INIT() \
+	#define PROFILER_GPU_INIT \
 		glGenQueries(PROFILER_QUERY_ID_COUNT, tracy_query_ids);\
 		i64 gputime;\
 		glGetInteger64v(GL_TIMESTAMP, &gputime);\
 		___tracy_emit_gpu_new_context((const struct ___tracy_gpu_new_context_data) {\
 			.gpuTime = gputime,\
-			.period = 1.f,\
+			.period = 1.0f,\
 			.context = 1 /*idfk at this point*/,\
 			.type = 1 /*Tracy::GpuContextType::OpenGL*/,\
 			.flags = 0\
 		});
 
-	void* tracy_malloc(size_t s) {
+	static inline void* tracy_malloc(size_t s) {
 		void* ret = malloc(s);
 		TracyCAlloc(ret, s)
 		return ret;
 	}
-	void* tracy_calloc(size_t n, size_t s) {
+	static inline void* tracy_calloc(size_t n, size_t s) {
 		void* ret = calloc(n, s);
 		TracyCAlloc(ret, n * s);
 		return ret;
 	}
-	void* tracy_realloc(void* ptr, size_t s) {
+	static inline void* tracy_realloc(void* ptr, size_t s) {
 		void* prev = ptr;
 		void* ret = realloc(ptr, s);
 		if(prev != ret) {
@@ -254,7 +264,7 @@ typedef double f64;
 		}
 		return ret;
 	}
-	void tracy_free(void* ptr) {
+	static inline void tracy_free(void* ptr) {
 		TracyCFree(ptr);
 		free(ptr);
 	}
@@ -274,10 +284,10 @@ typedef double f64;
 	#define VEC_H_IMPLEMENTATION
 	#include <vec.h>
 	// #define PROFILER_CALL(...) 
-	#define PROFILER_FRAME_MARK() 
-	#define PROFILER_ZONE_START() 
-	#define PROFILER_ZONE_END() 
-	#define PROFILER_GPU_OPENGL_INIT() 
+	#define PROFILER_FRAME_MARK 
+	#define PROFILER_ZONE_START 
+	#define PROFILER_ZONE_END 
+	#define PROFILER_GPU_INIT 
 	#define PROFILER_GPU_ZONE_START(name) 
 	#define PROFILER_GPU_ZONE_END() 
 	#define PROFILER_GPU_QUERIES_COLLECT() 
@@ -447,11 +457,6 @@ static struct {
 
 		uniform mat4 u_mvp;
 
-		// layout(location = 0) out vec2 v_uv;
-		// layout(location = 1) out vec4 v_col;
-		// layout(location = 2) out vec2 v_pos;
-		// layout(location = 3) out float v_idx;
-
 		out vec2 v_uv;
 		out vec4 v_col;
 		out vec2 v_pos;
@@ -471,11 +476,7 @@ static struct {
 		// CGLSLSTART
 		precision mediump float;
 		layout (location = 0) out vec4 color;
-
-		// layout(location = 0) in vec2 v_uv;
-		// layout(location = 1) in vec4 v_col;
-		// layout(location = 2) in vec2 v_pos;
-		// layout(location = 3) in float v_idx;
+		
 		in vec2 v_uv;
 		in vec4 v_col;
 		in vec2 v_pos;
@@ -485,19 +486,7 @@ static struct {
 		uniform int u_shape;
 
 		vec4 text;
-
-		// const float BayerMatrixDim = 8.0;
-		// float Bayer_matrix[8][8] = {
-		// 		{0.0/65.0, 32.0/65.0, 8.0/65.0, 40.0/65.0, 2.0/65.0, 34.0/65.0, 10.0/65.0, 42.0/65.0},
-		// 		{48.0/65.0, 16.0/65.0, 56.0/65.0, 24.0/65.0, 50.0/65.0, 18.0/65.0, 58.0/65.0, 26.0/65.0},
-		// 		{12.0/65.0, 44.0/65.0, 4.0/65.0, 36.0/65.0, 14.0/65.0, 46.0/65.0, 6.0/65.0, 38.0/65.0},
-		// 		{60.0/65.0, 28.0/65.0, 52.0/65.0, 20.0/65.0, 62.0/65.0, 30.0/65.0, 54.0/65.0, 22.0/65.0},
-		// 		{3.0/65.0, 35.0/65.0, 11.0/65.0, 43.0/65.0, 1.0/65.0, 33.0/65.0, 9.0/65.0, 41.0/65.0},
-		// 		{51.0/65.0, 19.0/65.0, 59.0/65.0, 27.0/65.0, 49.0/65.0, 17.0/65.0, 57.0/65.0, 25.0/65.0},
-		// 		{15.0/65.0, 47.0/65.0, 7.0/65.0, 39.0/65.0, 13.0/65.0, 45.0/65.0, 5.0/65.0, 37.0/65.0},
-		// 		{63.0/65.0, 31.0/65.0, 55.0/65.0, 23.0/65.0, 61.0/65.0, 29.0/65.0, 53.0/65.0, 21.0/65.0}
-		// };
-
+		
 		void main() {
 			if(v_uv.x < 0) {
 				color = v_col; // Shape rendering
@@ -510,9 +499,7 @@ static struct {
 			else {
 				color = vec4(text.rgb, text.a * v_col.a); // Image rendering
 			}
-
-			// uvec2 viewPortPosition = uvec2(gl_FragCoord.xy);
-			// if(color.a <= (Bayer_matrix[viewPortPosition.x % 8][viewPortPosition.y % 8])) {
+			
 			if(color.a <= .1) {
 				discard;
 			}
@@ -670,6 +657,8 @@ static inline struct gfx_atlas_node* gfx_atlas_insert(u32 atlas, u32 layer, u32 
 
 // ------------------------------------------ Util Funcs ------------------------------------------
 
+static inline void gfx_advance_z() { ctx->z += 1.0f / FLOAT_PRECION_BASED_MAX; }
+
 // Aligns to the next multiple of a, where a is a power of 2
 static inline u32 gfx_align(u32 n, u32 a) { return (n + a - 1) & ~(a - 1); }
 
@@ -817,7 +806,7 @@ struct gfx_ctx* gfx_init(const char* title, u32 w, u32 h) {
 	GLenum err;
 	CHECK_CALL((err = glewInit()), glfwTerminate(); return NULL, "GLEW initialization failed: %s", glewGetErrorString(err));
 	
-	PROFILER_GPU_OPENGL_INIT()
+	PROFILER_GPU_INIT
 
 	// Debug callback for detecting OpenGL errors
 	DEBUG_MODE(glDebugMessageCallback(glDebugMessageHandler, NULL))
@@ -856,8 +845,8 @@ struct gfx_ctx* gfx_init(const char* title, u32 w, u32 h) {
 }
 
 bool gfx_nextframe() {
-	PROFILER_FRAME_MARK()
-	PROFILER_ZONE_START()
+	PROFILER_FRAME_MARK
+	PROFILER_ZONE_START
 	glfwPollEvents();
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	ctx->frame.count ++;
@@ -865,14 +854,14 @@ bool gfx_nextframe() {
 	ctx->frame.delta = ctx->frame.start - ctx->frame.last;
 	ctx->frame.last  = ctx->frame.start;
 
-	PROFILER_ZONE_END()
+	PROFILER_ZONE_END
 	if (glfwWindowShouldClose(ctx->window)) {
 		PROFILER_GPU_QUERIES_COLLECT()
 		return false;
 	} else return true;
 }
 void gfx_frameend() {
-	PROFILER_ZONE_START()
+	PROFILER_ZONE_START
 	PROFILER_GPU_ZONE_START("frameend")
 	drawtext();
 	ctx->z = -1.0f;
@@ -881,7 +870,7 @@ void gfx_frameend() {
 	if(ctx->frame.count % 500 == 0) {
 		PROFILER_GPU_QUERIES_COLLECT()
 	}
-	PROFILER_ZONE_END()
+	PROFILER_ZONE_END
 }
 
 void gfx_close() {
@@ -922,7 +911,7 @@ double gfx_fps() {
 // -------------------------------------- Graphics Functions --------------------------------------
 
 static inline void draw() {
-	PROFILER_ZONE_START()
+	PROFILER_ZONE_START
 	PROFILER_GPU_ZONE_START("draw")
 	gfx_gl_texture* tex = ctx->gl.gltexes + ctx->curdrawbuf;
 	gfx_drawbuf* dbuf = &tex->drawbuf;
@@ -963,7 +952,7 @@ static inline void draw() {
 	vempty(dbuf->shp);
 	vempty(dbuf->idx);
 	PROFILER_GPU_ZONE_END()
-	PROFILER_ZONE_END()
+	PROFILER_ZONE_END
 }
 
 
@@ -976,18 +965,18 @@ void fill(u8 r, u8 g, u8 b, u8 a) {
 }
 
 void quad(int x1, int y1, int x2, int y2, int x3, int y3, int x4, int y4) {
-	PROFILER_ZONE_START()
+	PROFILER_ZONE_START
 	gfx_drawbuf* dbuf = &ctx->gl.gltexes[ctx->curdrawbuf].drawbuf;
 	u32 curidx = vlen(dbuf->shp);
 	ctx->z += 1.0f / FLOAT_PRECION_BASED_MAX;
 	vpusharr(dbuf->idx, { curidx, curidx + 1, curidx + 2, curidx + 2, curidx, curidx + 3 });
 	vpusharr(dbuf->shp, {
-		{ .p = { (f32) x1, (f32) y1 }, .z = ctx->z, .tp = { -1.f, -1.f }, .index = 0, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } },
-		{ .p = { (f32) x2, (f32) y2 }, .z = ctx->z, .tp = { -1.f, -1.f }, .index = 0, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } },
-		{ .p = { (f32) x3, (f32) y3 }, .z = ctx->z, .tp = { -1.f, -1.f }, .index = 0, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } },
-		{ .p = { (f32) x4, (f32) y4 }, .z = ctx->z, .tp = { -1.f, -1.f }, .index = 0, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } }
+		{ .p = { (f32) x1, (f32) y1 }, .z = ctx->z, .tp = { -1.0f, -1.0f }, .index = 0.0f, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } },
+		{ .p = { (f32) x2, (f32) y2 }, .z = ctx->z, .tp = { -1.0f, -1.0f }, .index = 0.0f, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } },
+		{ .p = { (f32) x3, (f32) y3 }, .z = ctx->z, .tp = { -1.0f, -1.0f }, .index = 0.0f, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } },
+		{ .p = { (f32) x4, (f32) y4 }, .z = ctx->z, .tp = { -1.0f, -1.0f }, .index = 0.0f, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } }
 	});
-	PROFILER_ZONE_END()
+	PROFILER_ZONE_END
 }
 
 void rect(int x, int y, int w, int h) {
@@ -1005,11 +994,69 @@ void background(u8 r, u8 g, u8 b, u8 a) {
 }
 
 
-void circle(int x, int y, int w, int h) {
+#define PI 3.14159265358979f
+void circle(int x, int y, int r) {
+	gfx_drawbuf* dbuf = &ctx->gl.gltexes[ctx->curdrawbuf].drawbuf;
+	u32 curidx = vlen(dbuf->shp);
+	float radius = r;
+	gfx_advance_z();
 	
+	// https://github.com/grimfang4/sdl-gpu/blob/master/src/renderer_shapes_GL_common.inl#L79
+	float dt = 0.625f / sqrtf(radius);
+	u32 numsegments = 2.0f * PI / dt + 1.0f;
+	if(numsegments < 16)
+		numsegments = 16, dt = 2.0f*PI/15.0f;
+
+
+	float cosdt = cosf(dt);
+	float sindt = sinf(dt);
+	float fx = x, fy = y;
+	float dx = cosdt, dy = sindt * dx, tmpdx;
+	u32 i = 2;
+
+	// First triangle, beginning of second triangle
+	vpusharr(dbuf->idx, { curidx, curidx + 1, curidx + 2 });
+	vpusharr(dbuf->shp, {
+		{ // Center
+			.p = { fx, fy }, .z = ctx->z,
+			.tp = { -1.0f, -1.0f }, .index = 0.0f,
+			.col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] }
+		},
+		{ // First edge point
+			.p = { fx + radius, fy }, .z = ctx->z,
+			.tp = { -1.0f, -1.0f }, .index = 0.0f,
+			.col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] }
+		}
+	});
+
+	while (i < numsegments) {
+		vpush(dbuf->shp, {
+			.p = { fx + radius * dx, fy + radius * dy }, .z = ctx->z,
+			.tp = { -1.0f, -1.0f }, .index = 0.0f,
+			.col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] }
+		});
+		vpusharr(dbuf->idx, { curidx, curidx + i, curidx + i + 1 });
+		
+		tmpdx = cosdt * dx - sindt * dy;
+		dy = sindt * dx + cosdt * dy;
+		dx = tmpdx;
+		i++;
+	}
+
+	// Last vertex
+	vpush(dbuf->shp, {
+		.p = { fx + radius * dx, fy + radius * dy }, .z = ctx->z,
+		.tp = { -1.0f, -1.0f }, .index = 0.0f,
+		.col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] }
+	});
+
+	// Last triangle, middle, last point, first point
+	vpusharr(dbuf->idx, { curidx, curidx + i, curidx + 1 });
 }
 
-
+void ellipse(int x, int y, int rx, int ry) {
+	
+}
 
 
 
@@ -1267,7 +1314,7 @@ img gfx_loadimg(char* file) {
 
 
 void image(img img, int x, int y, int w, int h) {
-	PROFILER_ZONE_START()
+	PROFILER_ZONE_START
 	if(img < 0) return;
 	gfx_gl_texture* tex = ctx->gl.gltexes + ctx->textures[img].gltex;
 	
@@ -1278,8 +1325,8 @@ void image(img img, int x, int y, int w, int h) {
 
 	// Creates a rectangle the image will be held on, then uploads the texture coordinates to map to the image
 	rect(x, y, w, h);
-	gfx_tp((float[]) { 0.f, 0.f, 1.f, 0.f, 1.f, 1.f, 0.f, 1.f });
-	PROFILER_ZONE_END()
+	gfx_tp((float[]) { 0.f, 0.f, 1.0f, 0.f, 1.0f, 1.0f, 0.f, 1.0f });
+	PROFILER_ZONE_END
 }
 
 gfx_vector* isize(img img) { return &ctx->textures[img].size; }
@@ -1312,7 +1359,7 @@ static inline FT_ULong gfx_readutf8(u8** str) {
 }
 
 static gfx_char* gfx_loadfontchar(typeface tf, FT_ULong c) {
-	PROFILER_ZONE_START()
+	PROFILER_ZONE_START
 	gfx_typeface* face = ctx->fonts.store + tf;
 	CHECK_CALL(FT_Set_Pixel_Sizes(face->face, 0, ctx->fonts.size * 4.0f / 3.0f), return NULL, "Couldn't set size");
 	CHECK_CALL(FT_Load_Char(face->face, c, FT_LOAD_RENDER), return NULL, "Couldn't load char '%c' (%X)", c, c);
@@ -1344,7 +1391,7 @@ static gfx_char* gfx_loadfontchar(typeface tf, FT_ULong c) {
 		.atlas = atlas,
 		.layer = (float) layer
 	};
-	PROFILER_ZONE_END()
+	PROFILER_ZONE_END
 	return hlastv(face->chars);
 }
 
@@ -1353,7 +1400,7 @@ static char* default_fallbacks[] = {
 };
 
 typeface gfx_loadfont(const char* file) {
-	PROFILER_ZONE_START()
+	PROFILER_ZONE_START
 	gfx_typeface new = {
 		.name = GFX_MALLOC(strlen(file) + 1),
 		.chars = {0},
@@ -1376,7 +1423,7 @@ typeface gfx_loadfont(const char* file) {
 	// Stores the font
 	vpush(ctx->fonts.store, new);
 	info("Loaded font '%s'", new.name);
-	PROFILER_ZONE_END()
+	PROFILER_ZONE_END
 	return vlen(ctx->fonts.store) - 1;
 }
 
@@ -1385,7 +1432,7 @@ void lineheight(f32 h) { ctx->fonts.lh = h; }
 
 // Draws any leftover shapes and text
 static inline void drawtext() {
-	PROFILER_ZONE_START()
+	PROFILER_ZONE_START
 	PROFILER_GPU_ZONE_START("drawtext")
 	for(u32 i = 0; i < vlen(ctx->atlases); i ++) {
 		gfx_texture_atlas* atlas = ctx->atlases + i;
@@ -1441,7 +1488,7 @@ static inline void drawtext() {
 		draw();
 	}
 	PROFILER_GPU_ZONE_END()
-	PROFILER_ZONE_END()
+	PROFILER_ZONE_END
 }
 void font(typeface face, u32 size) {
 	
@@ -1457,7 +1504,7 @@ void font(typeface face, u32 size) {
 // 	if(size > 0) ctx->fonts.size = size;
 }
 void text(const char* str, int x, int y) {
-	PROFILER_ZONE_START()
+	PROFILER_ZONE_START
 	// PROFILER_CALL(TracyCZoneText(tracy_ctx, str, strlen(str)))
 	if(!vlen(ctx->fonts.store)) return;
 
@@ -1512,6 +1559,6 @@ void text(const char* str, int x, int y) {
 		// Advance cursors for next glyph
 		curx += ch->advance;
 	}
-	PROFILER_ZONE_END()
+	PROFILER_ZONE_END
 }
 
