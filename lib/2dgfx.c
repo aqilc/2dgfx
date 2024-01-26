@@ -5,6 +5,9 @@
 		- Used like vulkan: https://developer.nvidia.com/opengl-vulkan
 		- https://registry.khronos.org/OpenGL-Refpages/gl4/html/glCopyImageSubData.xhtml
 
+	ECS:
+		https://austinmorlan.com/posts/entity_component_system/
+
 	OTHER UI RENDERERS:
 		egui: https://github.com/emilk/egui/blob/master/crates/epaint/src/tessellator.rs
 		nanogui: https://github.com/mitsuba-renderer/nanogui/blob/master/src/renderpass_gl.cpp
@@ -113,7 +116,9 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
 
+#define HASH_H_IMPLEMENTATION
 #include <hash.h>
+
 #include <math.h>
 #include <linmath.h>
 
@@ -332,8 +337,10 @@ struct gfx_drawbuf {
 		vec2 tp;
 		float index;
 		vec4 col;
-	}* shp;
+	}*   shp;
 	u32* idx;
+	u32 shpstart;
+	u32 shpframeend;
 };
 
 /**
@@ -657,6 +664,11 @@ static inline struct gfx_atlas_node* gfx_atlas_insert(u32 atlas, u32 layer, u32 
 
 // ------------------------------------------ Util Funcs ------------------------------------------
 
+static inline u32 gfx_curidx(gfx_drawbuf* dbuf, u32 numverts) {
+	if(dbuf->shpstart - numverts > 0) return dbuf->shpstart -= numverts;
+	
+	return vlen(dbuf->shp);
+}
 static inline void gfx_advance_z() { ctx->z += 1.0f / FLOAT_PRECION_BASED_MAX; }
 
 // Aligns to the next multiple of a, where a is a power of 2
@@ -968,7 +980,8 @@ void quad(int x1, int y1, int x2, int y2, int x3, int y3, int x4, int y4) {
 	PROFILER_ZONE_START
 	gfx_drawbuf* dbuf = &ctx->gl.gltexes[ctx->curdrawbuf].drawbuf;
 	u32 curidx = vlen(dbuf->shp);
-	ctx->z += 1.0f / FLOAT_PRECION_BASED_MAX;
+	gfx_advance_z();
+	
 	vpusharr(dbuf->idx, { curidx, curidx + 1, curidx + 2, curidx + 2, curidx, curidx + 3 });
 	vpusharr(dbuf->shp, {
 		{ .p = { (f32) x1, (f32) y1 }, .z = ctx->z, .tp = { -1.0f, -1.0f }, .index = 0.0f, .col = { ctx->curcol[0], ctx->curcol[1], ctx->curcol[2], ctx->curcol[3] } },
@@ -1510,7 +1523,7 @@ void text(const char* str, int x, int y) {
 
 	gfx_typeface* face = ctx->fonts.store + ctx->fonts.cur;
 	f32 scale = (f32) ctx->fonts.size * 4.0f / 3.0f /*px -> pts*/ / RENDERING_FONT_SIZE(.0f);
-	ctx->z += 1.0f / FLOAT_PRECION_BASED_MAX;
+	gfx_advance_z();
 
 	FT_ULong point;
 	f32 curx = x, cury = y; // So we don't have to do so many useless conversions! (profiled - performance bottleneck)
