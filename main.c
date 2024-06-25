@@ -48,13 +48,13 @@ void particles_draw(int width, int height) {
   }
 }
 
-img hi;
-typeface fon;
+gfx_img hi;
+gfx_face fon;
 char* fps = NULL;
 void setup() {
   gfx_init("2dgfx", 800, 600);
   hi = gfx_loadimg("hyperAngery.png");
-  fon = gfx_loadfont("roboto.ttf");
+  fon = gfx_load_font("roboto.ttf");
 
   for(int i = 0; i < PLEN; i ++)
     particle_reset(i, 600);
@@ -64,20 +64,20 @@ void loop() {
   gfx_vector dims = gfx_screen_dims();
 
 
-  particles_draw(dims.w, dims.h);
+  // particles_draw(dims.w, dims.h);
   fill(255, 255, 255, 255);
   rect(m.x, m.y, 20, 20);
   image(hi, 350, 200, 100, 100);
   fontsize(20);
   text("hello! THIS IS FINALLY WORKING PROPERLY WOOOOOO eahubrancodikr", 10, 400);
-  text("AAAAAAAAAAAA YES YOU YOU DON'T DISTORT ANYMOER", 10, 430);
+  text("AAAAAAAAAAAA YES YOU DON'T DISTORT ANYMOER", 10, 430);
   fontsize(200);
   text("BIG", 50, 300);
-  circle(400, 300, 200);
+  // circle(400, 300, 200);
 
 
+  fontsize(20);
   if(gfx_fpschanged())
     fps = vfmt("%.2f fps", gfx_fps());
-  fontsize(20);
   if(fps) text(fps, 800 - 150, 600 - 10);
 }
