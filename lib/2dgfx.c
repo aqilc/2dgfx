@@ -122,7 +122,14 @@
 #include <stb/stb_image.h>
 
 #define HASH_H_IMPLEMENTATION
+#define HASH_H_CUSTOM_HASHER
 #include <hash.h>
+
+#define XXH_STATIC_LINKING_ONLY   /* access advanced declarations */
+#define XXH_INLINE_ALL
+#define XXH_NO_XXH3
+#define XXH_IMPLEMENTATION   /* access definitions */
+#include <xxHash/xxhash.h>
 
 #include <math.h>
 #include <linmath.h>
@@ -154,7 +161,7 @@ typedef int64_t i64;
 typedef float f32;
 typedef double f64;
 
-// #define GFX_DEBUG
+#define GFX_DEBUG
 #ifdef GFX_DEBUG
 	// #define TRACY_ENABLE
 	#include <stdarg.h>
@@ -449,6 +456,10 @@ static _Thread_local struct gfx_ctx* ctx = NULL;
 enum gfx_drawprim {
 	TEXT = 0, SHAPE = 1, IMAGE = 2, SDF_TEXT = 3
 };
+#define TEXT 0
+#define SHAPE 1
+#define IMAGE 2
+#define SDF_TEXT 3
 
 static struct {
 	const char* vert;
@@ -498,12 +509,12 @@ static struct {
 		vec4 text;
 		
 		void main() {
-			if(v_type == uint(1)) {
+			if(v_type == uint(SHAPE)) {
 				color = v_col; // Shape rendering
 				return;
 			}
 			text = texture(u_tex, v_uv);
-			if(v_type == uint(0)) {
+			if(v_type == uint(TEXT)) {
 				color = vec4(v_col.rgb, text.r * v_col.a); // Text rendering
 			} else {
 				color = vec4(text.rgb, text.a * v_col.a); // Image rendering
@@ -681,7 +692,7 @@ static inline u32 gfx_totalarea(gfx_atlas_added* boxes /* Vector<gfx_atlas_added
 	return total;
 }
 
-static size_t gfx_read(char* file, char** (*buf)) {
+size_t gfx_read(char const* file, char** buf) {
 	FILE *fp = fopen(file, "rb");
 	#ifdef GFX_DEBUG
 		if (!fp) {
@@ -695,9 +706,9 @@ static size_t gfx_read(char* file, char** (*buf)) {
 	size_t len = ftell(fp);
 	rewind(fp);
 	
-	*(*buf) = GFX_MALLOC(len * sizeof(char) + 1);
-	*(*buf)[len] = '\0';
-	fread((*buf), 1, len, fp);
+	*buf = GFX_MALLOC(len * sizeof(char) + 1);
+	*buf[len] = '\0';
+	fread(*buf, 1, len, fp);
 	fclose(fp);
 
 	// returns both
@@ -710,27 +721,29 @@ static inline u8* gfx_readtoimg(char* file, int* width, int* height) {
 	return stbi_load(file, width, height, &channels, STBI_rgb_alpha);
 }
 
+// Hashing function for all hash tables
+static inline uint32_t hash_h_hash_func(const char * data, uint32_t len) { return XXH64(data, len, 764544365); }
+
+
 #ifdef _WIN32
-	// #define WIN32_LEAN_AND_MEAN
+	#define WIN32_LEAN_AND_MEAN
 	#define NOMINMAX
 	#include <windows.h>
 	// http://undocumented.ntinternals.net/index.html?page=UserMode%2FUndocumented%20Functions%2FTime%2FNtSetTimerResolution.html
 	// https://stackoverflow.com/a/22865850/10013227
+	typedef LONG NTSTATUS;
 	NTSYSAPI NTSTATUS NTAPI NtSetTimerResolution(ULONG DesiredResolution, BOOLEAN SetResolution, PULONG CurrentResolution);
+	#undef TEXT
 #else
 	#include <unistd.h>
 #endif
 
-
 void gfx_sleep(u32 milliseconds) {
 	#ifdef _WIN32
-		static bool set = false;
-		if(!set) {
-			ULONG res;
-			NtSetTimerResolution(5010, TRUE, &res);
-			set = true;
-		}
+		ULONG res;
+		NtSetTimerResolution(5010, TRUE, &res);
 		Sleep(milliseconds);
+		NtSetTimerResolution(5010, FALSE, &res);
 	#elif _POSIX_C_SOURCE >= 199309L
 		struct timespec ts;
 		ts.tv_sec = milliseconds / 1000;
@@ -829,6 +842,12 @@ static inline u32 gfx_atlas_new(GLenum format);
 static inline void drawtext();
 
 // --------------------------------------- Setup Functions --------------------------------------- //
+
+char const *const default_fonts[] = {
+#ifdef _WIN32
+	"C:\\Windows\\Fonts\\segoeui.ttf"
+#endif
+};
 
 FT_Library ft = NULL;
 
@@ -931,8 +950,9 @@ bool gfx_next_frame() {
 		return false;
 	} else return true;
 }
+
 void gfx_frameend() {
-	PROFILER_ZONE_START
+	PROFILER_ZONE_START	
 	PROFILER_GPU_ZONE_START("draw_text")
 	drawtext();
 	PROFILER_GPU_ZONE_END()
@@ -956,14 +976,24 @@ bool gfx_fpschanged() {
 
 double gfx_fps() {
 	double rn = ctx->frame.start;
-	if (rn - ctx->frame.lastfpscalc < FPS_RECALC_DELTA ||
-		ctx->frame.count - ctx->frame.lastfpscount == 0) return ctx->frame.lastfpsnum;
+	if(rn - ctx->frame.lastfpscalc < FPS_RECALC_DELTA ||
+		 ctx->frame.count - ctx->frame.lastfpscount == 0)
+		return ctx->frame.lastfpsnum;
 	ctx->frame.lastfpsnum = ((double) ctx->frame.count - ctx->frame.lastfpscount) / (rn - ctx->frame.lastfpscalc);
 	ctx->frame.lastfpscount = ctx->frame.count;
 	ctx->frame.lastfpscalc = rn;
 	return ctx->frame.lastfpsnum;
 }
 
+void gfx_default_fps_counter() {
+	static char fps[10] = {0};
+	const u32 oldfontsize = ctx->fonts.size;
+	font_size(20);
+	if(gfx_fpschanged())
+		snprintf(fps, 9, "%.2f fps", gfx_fps());
+	text(fps, ctx->width - 150, ctx->height - 10);
+	font_size(oldfontsize);
+}
 
 
 
@@ -985,8 +1015,8 @@ double gfx_fps() {
 // Arrays of vertices for perfect circles with the index being the radius. Anything above 16 pixels for radius will use the circle() algorithm below instead.
 // Each array is a set of triangles, the first point is the center and the rest are points that connect to it relatively
 u16 const precomputed_circle_vertices[][15][2] = {
-	{ { 1, 0 }, { 1, 1 } }, // 1 Triangle
-	{ { -1, -1 }, { 0, 0 } }
+	{ {  1, 0 }, { 1, 1 } }, // 1 Triangle
+	{ { -1,-1 }, { 0, 0 } }
 };
 
 
@@ -1343,7 +1373,7 @@ static inline void gfx_new_tex_slot(u32 gltex) {
 	glActiveTexture(GL_TEXTURE0 + (ctx->gl.gltexes[gltex].slot = findslot()));
 }
 
-static inline void gfx_tex_upload(u32 gltex, gfx_vector_mini size, u32 layers) {
+static void gfx_tex_upload(u32 gltex, gfx_vector_mini size, u32 layers) {
 	PROFILER_GPU_ZONE_START("texupload")
 	gfx_new_tex_slot(gltex);
 	gfx_gl_texture* t = ctx->gl.gltexes + gltex;
@@ -1375,7 +1405,7 @@ static inline void gfx_tex_upload(u32 gltex, gfx_vector_mini size, u32 layers) {
 	PROFILER_GPU_ZONE_END()
 }
 
-static inline void gfx_tex_update(u32 gltex, gfx_vector_mini size, u32 layers) {
+static void gfx_tex_update(u32 gltex, gfx_vector_mini size, u32 layers) {
 	PROFILER_GPU_ZONE_START("texupdate")
 	gfx_gl_texture* t = ctx->gl.gltexes + gltex;
 	
@@ -1393,7 +1423,8 @@ gfx_img gfx_loadimg(char* file) {
 	int width, height;
 	u8* t; CHECK_CALL(!(t = gfx_readtoimg(file, &width, &height)), return -1, "Couldn't load image '%s'", file);
 	info("Loaded image '%s' (%dx%d)", file, width, height);
-	return gfx_tex_new(GL_RGBA, t, width, height);
+	
+	// return gfx_tex_new(GL_RGBA, t, width, height);
 }
 
 
@@ -1517,8 +1548,9 @@ gfx_face gfx_load_font(const char* file) {
 	return vlen(ctx->fonts.store) - 1;
 }
 
-void fontsize(u32 size) { ctx->fonts.size = size; }
-void lineheight(f32 h) { ctx->fonts.lh = h; }
+
+void font_size(u32 size) { if(size) ctx->fonts.size = size; }
+void line_height(f32 h) { ctx->fonts.lh = h; }
 
 // Draws any leftover shapes and text
 static inline void drawtext() {
@@ -1627,8 +1659,8 @@ void text(const char* str, int x, int y) {
 		w     = ch->size.x;
 		h     = ch->size.y;
 
-		tx = ch->place.x * (USHRT_MAX / atlas->size.w) + 1;
-		ty = ch->place.y * (USHRT_MAX / atlas->size.h) + 1;
+		tx = ch->place.x * (USHRT_MAX / atlas->size.w);
+		ty = ch->place.y * (USHRT_MAX / atlas->size.h);
 		tw = ch->size.x  * (USHRT_MAX / atlas->size.w);
 		th = ch->size.y  * (USHRT_MAX / atlas->size.h);
 		

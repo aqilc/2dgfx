@@ -148,7 +148,7 @@ void image(gfx_img img, int x, int y, int w, int h); // Draws an image at those 
 gfx_vector_mini* isize(gfx_img img); // Image size.
 
 // Text Drawing commands
-void fontsize(uint32_t size);
+void font_size(uint32_t size);
 void lineheight(float h);
 void font(gfx_face face, uint32_t size);
 void text(const char* str, int x, int y);
@@ -158,6 +158,7 @@ double gfx_time();
 void gfx_sleep(uint32_t miliseconds);
 double gfx_fps();
 bool gfx_fpschanged();
+void gfx_default_fps_counter();
 
 void on_mouse_button(gfx_vector pos, gfx_mouse_button button, bool pressed, gfx_keymod mods);
 void on_mouse_move(gfx_vector pos);
