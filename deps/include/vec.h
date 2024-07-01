@@ -279,7 +279,7 @@ VEC_H_EXTERN void vremove_(void* v, uint32_t size, uint32_t pos) {
 }
 
 VEC_H_EXTERN char* vfmt(char* str, ...) {
-	static char* fmtstr;
+	static _Thread_local char* fmtstr;
 	if(!fmtstr) fmtstr = vnew();
 	
 	va_list args, args2;

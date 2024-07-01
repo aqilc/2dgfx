@@ -15,11 +15,11 @@ struct GENERIC_TABLE_ {
   struct GENERIC_ITEM_* items;
 };
 
-#define HASH_STRIFY2(x) #x
-#define HASH_STRIFY(x) HASH_STRIFY2(x)
+#define HASH_STRIFY2_(x) #x
+#define HASH_STRIFY_(x) HASH_STRIFY2_(x)
 
-#define HASH_CONCAT_RAW(x, y, z) x##y##z
-#define HASH_CONCAT(x, y, z) HASH_CONCAT_RAW(x, y, z)
+// #define HASH_CONCAT_RAW_(x, y, z) x##y##z
+// #define HASH_CONCAT_(x, y, z) HASH_CONCAT_RAW_(x, y, z)
 
 // Defines an item for the hashtable. Types for `k` get messed up when you pass in `char*` but we ignore it bc it barely matters.
 // #define ITEMNAMEMANGLER HASH
@@ -50,9 +50,9 @@ struct GENERIC_TABLE_ {
 #define hsetst(htb, ...) mayberesize(htb), *(hvalt(htb)*) htset((struct GENERIC_TABLE_*) &(htb), &(hkeyt(htb)) __VA_ARGS__, sizeof(**(htb).keys), sizeof(*(htb).items->v), false)
 #define hsets(htb, key) mayberesize(htb), *(hvalt(htb)*) htset((struct GENERIC_TABLE_*) &(htb), key, strlen(key) + 1, sizeof(*(htb).items->v), true)
 
-#define hsetcpys(str, htb, ...) mayberesize(htb), strcpy((char*) htset((struct GENERIC_TABLE_*) &(htb), (hkeyt(htb)*) &__VA_ARGS__, sizeof(**(htb).keys), strlen(str), false), str)
-#define hsetstcpys(str, htb, ...) mayberesize(htb), strcpy((char*) htset((struct GENERIC_TABLE_*) &(htb), &(hkeyt(htb)) __VA_ARGS__, sizeof(**(htb).keys), strlen(str), false), str)
-#define hsetscpys(str, htb, key) mayberesize(htb), strcpy((char*) htset((struct GENERIC_TABLE_*) &(htb), key, strlen(key) + 1, strlen(str) + 1, true), str)
+#define hset_strcpy(str, htb, ...) mayberesize(htb), strcpy((char*) htset((struct GENERIC_TABLE_*) &(htb), (hkeyt(htb)*) &__VA_ARGS__, sizeof(**(htb).keys), strlen(str), false), str)
+#define hsetst_strcpy(str, htb, ...) mayberesize(htb), strcpy((char*) htset((struct GENERIC_TABLE_*) &(htb), &(hkeyt(htb)) __VA_ARGS__, sizeof(**(htb).keys), strlen(str), false), str)
+#define hsets_strcpy(str, htb, key) mayberesize(htb), strcpy((char*) htset((struct GENERIC_TABLE_*) &(htb), key, strlen(key) + 1, strlen(str) + 1, true), str)
 
 #define hfree(htb) htfree((struct GENERIC_TABLE_*) &(htb))
 #define hreset(htb) htreset((struct GENERIC_TABLE_*) &(htb))
@@ -61,6 +61,63 @@ struct GENERIC_TABLE_ {
 #define hgetn(htb, idx) (((typeof((htb).items)) ((htb).keys[idx]))->v)
 #define hfirst(htb) ((typeof((htb).items)) ((htb).keys[0]))
 
+
+#define hentry(htb) struct { hkeyt(htb) key; hvalt(htb) item; }
+#define HTINITIALIZER_(htb) hentry(htb) htinitarr[]
+
+// In a perfect world where _Generic was actually good. :(
+/*
+#define haddentries(htb, ...) do { HTINITIALIZER_(htb) = __VA_ARGS__;\
+  htinit((struct GENERIC_TABLE_*) &(htb), sizeof(htinitarr));\
+  for(unsigned int i = 0; i < sizeof(htinitarr) / htinitarr[0]; i++)\
+    _Generic(**(htb).keys,\
+      char*: _Generic(*(htb).items->v,\
+        char*: (hsets_strcpy(htinitarr[i].item, htb, htinitarr[i].key)),\
+        default: (hsets(htb, htinitarr[i].key) = htinitarr[i].item)\
+      ),\
+      default: Generic(*(htb).items->v,\
+        char*: (hset_strcpy(htinitarr[i].item, htb, htinitarr[i].key)),\
+        default: (hset(htb, htinitarr[i].key) = htinitarr[i].item)\
+      )\
+    );\
+} while(0)
+*/
+
+#define hadd_entries(htb, ...) do { HTINITIALIZER_(htb) = __VA_ARGS__;\
+  htinit((struct GENERIC_TABLE_*) &(htb), sizeof(htinitarr));\
+  for(unsigned int i = 0; i < sizeof(htinitarr) / sizeof(htinitarr[0]); i++)\
+    _Generic(**(htb).keys,\
+      char*: (hsets(htb, htinitarr[i].key) = htinitarr[i].item),\
+      default: (hset(htb, htinitarr[i].key) = htinitarr[i].item)\
+    );\
+} while(0)
+
+#define hadd_entries_strcpy(htb, ...) do { HTINITIALIZER_(htb) = __VA_ARGS__;\
+  htinit((struct GENERIC_TABLE_*) &(htb), sizeof(htinitarr));\
+  for(unsigned int i = 0; i < sizeof(htinitarr) / sizeof(htinitarr[0]); i++)\
+    _Generic(**(htb).keys,\
+      char*: (hsets_strcpy(htinitarr[i].item, htb, htinitarr[i].key)),\
+      default: (hset_strcpy(htinitarr[i].item, htb, htinitarr[i].key))\
+    );\
+} while(0)
+
+#define hmerge_entries(htb, entries) do {\
+  htinit((struct GENERIC_TABLE_*) &(htb), sizeof(entries));\
+  for(unsigned int i = 0; i < sizeof(entries) / sizeof(entries[0]); i++)\
+    _Generic(**(htb).keys,\
+      char*: (hsets(htb, entries[i].key) = entries[i].item),\
+      default: (hset(htb, entries[i].key) = entries[i].item)\
+    );\
+} while(0)
+
+#define hmerge_entries_strcpy(htb, entries) do {\
+  htinit((struct GENERIC_TABLE_*) &(htb), sizeof(entries));\
+  for(unsigned int i = 0; i < sizeof(entries) / sizeof(entries[0]); i++)\
+    _Generic(**(htb).keys,\
+      char*: (hsets_strcpy(entries[i].item, htb, entries[i].key)),\
+      default: (hset_strcpy(entries[i].item, htb, entries[i].key))\
+    );\
+} while(0)
 
 // Raw Hashtable methods
 void  htinit(struct GENERIC_TABLE_* t, unsigned int size);
@@ -125,15 +182,75 @@ int main() {
 
 // Defined this file for a clear interface for the main hash function used in the project
 
-// http://www.azillionmonkeys.com/qed/hash.html
-#include "stdint.h" /* Replace with <stdint.h> if appropriate */
-uint32_t hash(const char * data, int len);
+#include <stdint.h> /* Replace with <stdint.h> if appropriate */
+
 
 
 #include <string.h>
 #include <stdlib.h>
 
-// #include <stdio.h>
+
+static inline uint32_t hash_h_hash_func(const char * data, uint32_t len);
+
+#ifndef HASH_H_CUSTOM_HASHER
+// http://www.azillionmonkeys.com/qed/hash.html
+#include <stddef.h>
+#undef get16bits
+#if (defined(__GNUC__) && defined(__i386__)) || defined(__WATCOMC__) \
+  || defined(_MSC_VER) || defined (__BORLANDC__) || defined (__TURBOC__)
+#define get16bits(d) (*((const uint16_t *) (d)))
+#endif
+
+#if !defined (get16bits)
+#define get16bits(d) ((((uint32_t)(((const uint8_t *)(d))[1])) << 8)\
+                       +(uint32_t)(((const uint8_t *)(d))[0]) )
+#endif
+
+static inline uint32_t hash_h_hash_func(const char * data, uint32_t len) {
+uint32_t hash = len, tmp;
+int rem;
+
+    if (len <= 0 || data == NULL) return 0;
+
+    rem = len & 3;
+    len >>= 2;
+
+    /* Main loop */
+    for (;len > 0; len--) {
+        hash  += get16bits(data);
+        tmp    = (get16bits(data+2) << 11) ^ hash;
+        hash   = (hash << 16) ^ tmp;
+        data  += 2*sizeof(uint16_t);
+        hash  += hash >> 11;
+    }
+
+    /* Handle end cases */
+    switch (rem) {
+        case 3: hash += get16bits(data);
+                hash ^= hash << 16;
+                hash ^= ((signed char)data[sizeof(uint16_t)]) << 18;
+                hash += hash >> 11;
+                break;
+        case 2: hash += get16bits(data);
+                hash ^= hash << 11;
+                hash += hash >> 17;
+                break;
+        case 1: hash += (signed char)*data;
+                hash ^= hash << 10;
+                hash += hash >> 1;
+    }
+
+    /* Force "avalanching" of final 127 bits */
+    hash ^= hash << 3;
+    hash += hash >> 5;
+    hash ^= hash << 4;
+    hash += hash >> 17;
+    hash ^= hash << 25;
+    hash += hash >> 6;
+
+    return hash;
+}
+#endif
 
 typedef unsigned int uint; // bc why
 
@@ -172,7 +289,7 @@ void htinit(struct GENERIC_TABLE_* t, uint size) {
 \
   for(uint i = 0; i < t->n; i++) {\
     __VA_ARGS__\
-    uint h = hash(*t->keys[i], ksize);\
+    uint h = hash_h_hash_func(*t->keys[i], ksize);\
     uint newind = h % size;\
 \
     struct GENERIC_ITEM_* item = (struct GENERIC_ITEM_*)t->keys[i];\
@@ -259,37 +376,37 @@ void htreset(struct GENERIC_TABLE_* t) {
 // Gets an arbitrary type key from hash table
 void* htget(struct GENERIC_TABLE_* t, void* k, uint ksize, bool str) {
   if(!t->size) return NULL; // If the table is empty, return NULL (no key found)
-  int index = hash(k, ksize) % t->size;
+  int index = hash_h_hash_func(k, ksize) % t->size;
   struct GENERIC_ITEM_* item = t->items + index;
   
   if(item->k != NULL) {
-		switch (ksize) {
-		case 4:
-			do {
-				if (*(uint*) item->k == *(uint*) k)
-					return item->v;
-				else item = item->next;
-			} while (item != NULL);
-			break;
-		case 8:
-			do {
-				if (*(uint64_t*) item->k == *(uint64_t*) k)
-					return item->v;
-				else item = item->next;
-			} while (item != NULL);
-			break;
-		default:
-			if(str) do {
-				if (strcmp(item->k, k) == 0)
-					return item->v;
-				else item = item->next;
-			} while (item != NULL);
-			else do {
-				if (memcmp(item->k, k, ksize) == 0)
-					return item->v;
-				else item = item->next;
-			} while (item != NULL);
-		}
+    switch (ksize) {
+    case 4:
+      do {
+        if (*(uint*) item->k == *(uint*) k)
+          return item->v;
+        else item = item->next;
+      } while (item != NULL);
+      break;
+    case 8:
+      do {
+        if (*(uint64_t*) item->k == *(uint64_t*) k)
+          return item->v;
+        else item = item->next;
+      } while (item != NULL);
+      break;
+    default:
+      if(str) do {
+        if (strcmp(item->k, k) == 0)
+          return item->v;
+        else item = item->next;
+      } while (item != NULL);
+      else do {
+        if (memcmp(item->k, k, ksize) == 0)
+          return item->v;
+        else item = item->next;
+      } while (item != NULL);
+    }
   }
 
   return NULL;
@@ -298,38 +415,38 @@ void* htget(struct GENERIC_TABLE_* t, void* k, uint ksize, bool str) {
 // Sets/inserts an arbitrary type key in the given hash table
 void* htset(struct GENERIC_TABLE_* t, void* k, uint ksize, uint vsize, bool str) {
   if(!ksize) return NULL; // There needs to be a key
-  int index = hash(k, ksize) % t->size;
+  int index = hash_h_hash_func(k, ksize) % t->size;
   struct GENERIC_ITEM_* item = t->items + index;
   struct GENERIC_ITEM_* last = NULL;
 
   if(item->k != NULL) {
-		switch (ksize) {
-		case 4:
-			do {
-				if (*(uint*) item->k == *(uint*) k)
-					return item->v = realloc(item->v, vsize);
-				else last = item, item = item->next;
-			} while (item != NULL);
-			break;
-		case 8:
-			do {
-				if (*(uint64_t*) item->k == *(uint64_t*) k)
-					return item->v = realloc(item->v, vsize);
-				else last = item, item = item->next;
-			} while (item != NULL);
-			break;
-		default:
-			if(str) do {
-				if (strcmp(item->k, k) == 0)
-					return item->v = realloc(item->v, vsize);
-				else last = item, item = item->next;
-			} while (item != NULL);
-			else do {
-				if (memcmp(item->k, k, ksize) == 0)
-					return item->v = realloc(item->v, vsize);
-				else last = item, item = item->next;
-			} while (item != NULL);
-		}
+    switch (ksize) {
+    case 4:
+      do {
+        if (*(uint*) item->k == *(uint*) k)
+          return item->v = realloc(item->v, vsize);
+        else last = item, item = item->next;
+      } while (item != NULL);
+      break;
+    case 8:
+      do {
+        if (*(uint64_t*) item->k == *(uint64_t*) k)
+          return item->v = realloc(item->v, vsize);
+        else last = item, item = item->next;
+      } while (item != NULL);
+      break;
+    default:
+      if(str) do {
+        if (strcmp(item->k, k) == 0)
+          return item->v = realloc(item->v, vsize);
+        else last = item, item = item->next;
+      } while (item != NULL);
+      else do {
+        if (memcmp(item->k, k, ksize) == 0)
+          return item->v = realloc(item->v, vsize);
+        else last = item, item = item->next;
+      } while (item != NULL);
+    }
   } else t->filledbuckets ++;
   if(!item) item = malloc(sizeof(struct GENERIC_ITEM_));
   if(last) last->next = item;
