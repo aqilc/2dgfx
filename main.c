@@ -1,3 +1,4 @@
+#include "lib/2dgfx.h"
 #include <stdlib.h>
 #include <math.h>
 
@@ -42,7 +43,7 @@ void particles_draw(int width, int height) {
   for(int i = 0; i < PLEN; i ++) {
     if(particles[i].pos.fx > width + 100) particle_reset(i, height);
     particles[i].pos.fx += particles[i].spd;
-    fontsize(particles[i].size);
+    font_size(particles[i].size);
     fill(particles[i].col[0], particles[i].col[1], particles[i].col[2], 255);
     text(messages[particles[i].text], particles[i].pos.fx, particles[i].pos.y);
   }
@@ -68,16 +69,12 @@ void loop() {
   fill(255, 255, 255, 255);
   rect(m.x, m.y, 20, 20);
   image(hi, 350, 200, 100, 100);
-  fontsize(20);
+  font_size(20);
   text("hello! THIS IS FINALLY WORKING PROPERLY WOOOOOO eahubrancodikr", 10, 400);
   text("AAAAAAAAAAAA YES YOU DON'T DISTORT ANYMOER", 10, 430);
-  fontsize(200);
+  font_size(200);
   text("BIG", 50, 300);
   // circle(400, 300, 200);
 
-
-  fontsize(20);
-  if(gfx_fpschanged())
-    fps = vfmt("%.2f fps", gfx_fps());
-  if(fps) text(fps, 800 - 150, 600 - 10);
+  gfx_default_fps_counter();
 }

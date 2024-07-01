@@ -83,13 +83,11 @@ struct tris_settings {
 };
 
 struct {
-
   // DAS state
   double das_start;
   int das_dir;
   bool left_first;
   bool das_done;
-
   
 } tris_state = {0};
 
@@ -209,11 +207,9 @@ static void fill_queue(struct tris_board* board) {
   for(u8 i = 0; i < 6; i++) {
     i8 nth_piece = rand() % (7 - i) + 1;
     u8 pieces_not_used = ~pieces_used & 0b01111111;
-    // printf("Picking piece %d, used: %d, not used: %d\n", nth_piece, pieces_used, pieces_not_used);
-    while(-- nth_piece > 0) // printf("clz: %d %d | ", pieces_not_used, (6+(25 - __builtin_clzl(pieces_not_used)))),
+    while(-- nth_piece > 0)
       pieces_not_used ^= 1 << (6 + (25 - __builtin_clzl(pieces_not_used)));
     u8 piece = __builtin_clzl(pieces_not_used) - 24;
-    // printf("%d: %d, 0x%X\n", i, piece, pieces_not_used);
     
     board->queue[i] = piece;
     pieces_used |= 1 << (7 - piece);
@@ -221,7 +217,6 @@ static void fill_queue(struct tris_board* board) {
   board->queue[6] = __builtin_clzl(~pieces_used & 0b01111111) - 24;
   
   board->queue_len += 7;
-  // printf("Queue: %d, %d, %d, %d, %d, %d, %d\n", board->queue[0], board->queue[1], board->queue[2], board->queue[3], board->queue[4], board->queue[5], board->queue[6]);
 }
 
 static inline void pop_queue(struct tris_board* board) {
@@ -266,21 +261,15 @@ int main() {
     last_frame_begin = gfx_time();
     loop();
 
-    fontsize(20);
-    if(gfx_fpschanged())
-      fps = vfmt("%.2f fps", gfx_fps());
-    if(fps) text(fps, 1000 - 150, 1000 - 10);
-
+    gfx_default_fps_counter();
     const double now = gfx_time();
     double res;
     if(!tris_state.das_done && tris_state.das_start &&
         now - last_frame_begin < (1.0 / 60.0) &&
-        // printf("got here %lf, %lf, %lf\n", tris_state.das_start, now, (tris_state.das_start * 1000.0 + settings.DAS) / 1000.0 - now ) &&
         (res = (tris_state.das_start * 1000 + settings.DAS) / 1000 - now) < (1.0 / 60.0)) {
       if((res *= 1000.0) > 0.5) gfx_sleep(round(res));
       controlled->pos.x = project_sideways(controlled, tris_state.das_dir);
       tris_state.das_done = true;
-      // printf("DAS Fired at %lf time after %d dir\n", gfx_time() - tris_state.das_start, tris_state.das_dir);
     }
     gfx_frameend();
   }
@@ -330,9 +319,6 @@ void tris_draw_board(struct tris_board* board, int blocksize, int x, int y) {
   int bh = board->size.h;
   int buffer = board->top_buffer;
   
-  // fill(0, 0, 0, 255);
-  // rect(x, y, bw * blocksize, bh * blocksize);
-
   int line_width = blocksize / 10;
   fill(255, 255, 255, 255);
   rect(x - line_width, y, line_width, bh * blocksize);
@@ -418,13 +404,6 @@ void tris_draw_board(struct tris_board* board, int blocksize, int x, int y) {
 
     fill(tris_block_colors[block][0][0], tris_block_colors[block][0][1], tris_block_colors[block][0][2], 255);
     rect(rect_x, rect_y, blocksize, blocksize);
-
-    // Draws an outline around the block
-    // fill(tris_block_colors[block][0][0], tris_block_colors[block][0][1], tris_block_colors[block][0][2], 255);
-    // rect(rect_x, rect_y, 1, blocksize);
-    // rect(rect_x + blocksize - 1, rect_y, 1, blocksize);
-    // rect(rect_x, rect_y, blocksize, 1);
-    // rect(rect_x, rect_y + blocksize - 1, blocksize, 1);
   }
 
   tris_draw_block(board->type, board->rotation, blocksize, x + board->pos.x * blocksize, y + board->pos.y * blocksize);
@@ -468,37 +447,26 @@ static inline bool collide(struct tris_board* board, int x, int y, int rot) {
 }
 
 static u32 project_sideways(struct tris_board* board, int dir /* -1 or 1 or infinite loop :skull: */) {
-  // printf("Piece: %c | %d, %d, [%d, %d, %d, %d]\n", tris_piece_to_char[board->type], piece_top, piece_bottom, piece_side[0], piece_side[1], piece_side[2], piece_side[3]);
   int board_limit_to = (board->size.w + dir * board->size.w) / 2;
 
   int top = tris_pieces_left_right_bottom[board->type].top_limit[board->rotation] + board->pos.y;
   int bottom = tris_pieces_left_right_bottom[board->type].bottom_limit[board->rotation] + board->pos.y;
 
-  printf("%c: %d, %d, %d, %d\n", tris_piece_to_char[board->type], top, bottom, board->pos.x, board_limit_to);
   int lowest_difference = dir * (int) board->size.w;
   for(int y = top; y <= bottom; y ++) {
     int row_start = tris_pieces_left_right_bottom[board->type].leftbottomright[dir + 1][board->rotation][y - board->pos.y] + board->pos.x;
-    printf("%d Row start: %d | ", y, row_start);
     bool collision = false;
     for(int x = row_start; x != board_limit_to; x += dir)
       if(board->board[(y + board->top_buffer) * board->size.w + x] &&
         (collision = true) &&
-        printf("collision at %d | ", x) &&
         (dir == 1 ? x - (row_start - board->pos.x) < lowest_difference - dir : x - (row_start - board->pos.x) - dir > lowest_difference)) {
         lowest_difference = x - (row_start - board->pos.x) - dir;
       }
     int newval = board_limit_to - (row_start - board->pos.x);
     if(!collision && (dir == 1 ? (--newval) < lowest_difference : newval > lowest_difference)) lowest_difference = newval;
   }
-  printf("\ndifference: %d\n", lowest_difference);
   
-  // for(int i = board->pos.x + piece_side; i >= 0 && i < board->size.x; i += dir)
-  //   for(int j = board->pos.y + piece_bottom; j <= board->pos.y + piece_top; j ++)
-  //     if(board->board[j * board->size.x + i]) return i;
-
-  // int width = right - left + 1;
   return lowest_difference;
-  // return (board->size.w / 2) + dir * (board->size.w / 2) + (- width - dir * width) / 2 - left;
 }
 
 static u32 project_down(struct tris_board* board) {
@@ -527,18 +495,6 @@ static inline void rotate(struct tris_board* board, int dir) {
   int new_rot = (board->rotation + dir) % 4;
   if(new_rot < 0) new_rot += 4;
   if(!collide(board, board->pos.x, board->pos.y, new_rot)) goto complete_rotation;
-  // else {
-  //   int i = 0;
-  //   for(; i < 4; i ++) {
-  //     int bx = board->pos.x + tris_pieces_places[board->type][new_rot][i].x;
-  //     int by = board->pos.y + tris_pieces_places[board->type][new_rot][i].y + board->top_buffer;
-  //     if(bx < 0 || bx >= board->size.x || by >= board->size.h) break;
-  //     if(board->board[by * board->size.x + bx]) break;
-  //   }
-  //   printf("Collide at %d, %d, checking (%d, %d) which is %c\n", board->pos.x, board->pos.y, board->pos.x + tris_pieces_places[board->type][new_rot][i].x,
-  //     board->pos.y + tris_pieces_places[board->type][new_rot][i].y,
-  //     tris_piece_to_char[board->board[(board->pos.y + tris_pieces_places[board->type][new_rot][i].y + board->top_buffer) * board->size.w + (board->pos.x + tris_pieces_places[board->type][new_rot][i].x)]]);
-  // }
   if(board->type == PIECE_O) return;
 
   gfx_vector_micro* positions = (gfx_vector_micro*) tris_jlstz_rot_offsets[old_rot * 2 + (dir == 1)];
@@ -549,14 +505,12 @@ static inline void rotate(struct tris_board* board, int dir) {
   } else if(dir == 2) {
     positions = (gfx_vector_micro*) tris_jlstz_rot180_offsets[old_rot], len = 11;
   }
-  // printf("For piece %c, in rotation state %d, new state %d picked idx %d\n", tris_piece_to_char[board->type], old_rot, new_rot, old_rot * 2 + (dir == 1));
   for(int i = 0; i < len; i ++) {
     if(!collide(board, board->pos.x + positions[i].x, board->pos.y + positions[i].y, new_rot)) {
       board->pos.x += positions[i].x;
       board->pos.y += positions[i].y;
       goto complete_rotation;
     }
-    //else printf("Collide at %d (%d), %d (%d)\n", board->pos.x + positions[i].x, positions[i].x, board->pos.y + positions[i].y, positions[i].y);
   }
   return;
 complete_rotation:
@@ -584,7 +538,6 @@ static void clear_lines(struct tris_board* board) {
     else if(!full && current_region_start != INT_MIN) {
       int non_cleared_lines_size = current_region_start - current_top;
       int cleared_region_size = y - current_region_start;
-      // printf("Y: %d, Current_region_start: %d, current_top: %d, Non-cleared: %d, Cleared: %d\n", y, current_region_start, current_top, non_cleared_lines_size, cleared_region_size);
       if(non_cleared_lines_size)
         memmove(board->board + (y - non_cleared_lines_size) * board->size.w,
                 board->board + current_top * board->size.w,
@@ -597,7 +550,6 @@ static void clear_lines(struct tris_board* board) {
   if(current_region_start != INT_MIN) {
     int non_cleared_lines_size = current_region_start - current_top;
     int cleared_region_size = (board->size.h + board->top_buffer) - current_region_start;
-    // printf("Y: %d, Current_region_start: %d, current_top: %d, Non-cleared: %d, Cleared: %d\n", (board->size.h + board->top_buffer), current_region_start, current_top, non_cleared_lines_size, cleared_region_size);
     if(non_cleared_lines_size)
       memmove(board->board + ((board->size.h + board->top_buffer) - non_cleared_lines_size) * board->size.w,
               board->board + current_top * board->size.w,
@@ -624,12 +576,14 @@ static inline void place(struct tris_board* board) {
 // --------------------------------- Event Handling --------------------------------- //
 
 void on_key_button(gfx_keycode key, bool pressed, gfx_keymod mods) {
+  if(!controlled) return;
+  
   static int direction;
   if((key == settings.left && (direction = -1)) ||
      (key == settings.right && (direction = 1))) {
-    if(pressed) { // && !collide(controlled, controlled->pos.x + direction, controlled->pos.y, controlled->rotation)) {
-      if(!collide(controlled, controlled->pos.x + direction, controlled->pos.y, controlled->rotation))
-        controlled->pos.x += direction;
+    if(pressed && !collide(controlled, controlled->pos.x + direction, controlled->pos.y, controlled->rotation)) {
+      // if(!collide(controlled, controlled->pos.x + direction, controlled->pos.y, controlled->rotation))
+      controlled->pos.x += direction;
 
       if(!tris_state.das_start)
         tris_state.left_first = key == settings.left;
@@ -674,6 +628,9 @@ void on_key_button(gfx_keycode key, bool pressed, gfx_keymod mods) {
       controlled->pos = (gfx_vector_micro) { PIECE_START };
       controlled->rotation = 0;
     }
+    
+    else if(key == settings.reset)
+      clear_board(controlled);
   }
 }
 
