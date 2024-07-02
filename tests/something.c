@@ -139,18 +139,18 @@
 
 int main() {
   double start = get_precise_time();
-  https_req* req = https_get("https://www.google.com/");
-  https_req* req2 = https_get("https://www.bing.com/");
-  https_req* req3 = https_get("https://www.yahoo.com/");
-  https_req* req4 = https_get("https://you.com/");
-  https_req* req5 = https_get("https://duckduckgo.com/");
-  https_req* req6 = https_get("https://search.brave.com/");
-  https_req* req7 = https_get("https://komo.ai/");
-  https_req* req8 = https_get("https://yep.com/");
+  https_req* req = https_get("http://picsum.photos/600/800");
+  // https_req* req2 = https_get("https://www.bing.com/");
+  // https_req* req3 = https_get("https://www.yahoo.com/");
+  // https_req* req4 = https_get("https://you.com/");
+  // https_req* req5 = https_get("https://duckduckgo.com/");
+  // https_req* req6 = https_get("https://search.brave.com/");
+  // https_req* req7 = https_get("https://komo.ai/");
+  // https_req* req8 = https_get("https://yep.com/");
   double opentime = get_precise_time();
   printf("Total https_get Time: %f\n", opentime - start);
-  while(req->state == HTTPS_PENDING || req2->state == HTTPS_PENDING || req3->state == HTTPS_PENDING || req4->state == HTTPS_PENDING ||
-        req5->state == HTTPS_PENDING || req6->state == HTTPS_PENDING || req7->state == HTTPS_PENDING || req8->state == HTTPS_PENDING);// Sleep(20);
+  while(req->state == HTTPS_PENDING/* || req2->state == HTTPS_PENDING || req3->state == HTTPS_PENDING || req4->state == HTTPS_PENDING ||
+        req5->state == HTTPS_PENDING || req6->state == HTTPS_PENDING || req7->state == HTTPS_PENDING || req8->state == HTTPS_PENDING*/);// Sleep(20);
   printf("End Time: %f\n", get_precise_time() - opentime);
 
   if(req->state != HTTPS_COMPLETE) {

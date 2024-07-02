@@ -1,5 +1,6 @@
 /////////////////////////////////////////////////////////////////////////////////////////////
 // https.h v1.0 by @aqilc                                                                  //
+// Licence: MIT                                                                            //
 //                                                                                         //
 // Initiates HTTPS requests in a really easy way, aims to be cross platform but only       //
 // Windows is currently implemented.                                                       //
@@ -11,6 +12,32 @@
 // Define HTTPS_APPLICATION_NAME in impl file as string according to the name of your app. //
 /////////////////////////////////////////////////////////////////////////////////////////////
 
+/**
+
+Example:
+--------
+
+    #include <stdio.h>
+    #define 
+    #include "include/https.h"
+
+    int main() {
+        https_req* req = https_get("https://picsum.photos/600/800");
+        while(req->state == HTTPS_PENDING);// Sleep(20);
+
+        if(req->state != HTTPS_COMPLETE) {
+            printf("Failed to get response\nStatus Code: %d\nReason: %s", req->status_code, req->req_failed_reason);
+            https_free(req);
+            return 1;
+        }
+
+        printf("Status: %d\n", req->status_code);
+        printf("Response Size: %u\n", req->data_len);
+        printf("Response: %.256s\n", (char const*) req->data);
+        https_free(req);
+    }
+
+*/
 
 #ifndef HTTPS_H
 #define HTTPS_H
@@ -30,7 +57,7 @@ enum https_state {
     HTTPS_PENDING,
     HTTPS_COMPLETE,
     HTTPS_FAILED,
-    HTTPS_ERROR,
+    HTTPS_CONN_ERROR,
 };
 enum https_errors {
     HTTPS_ERR_CANNOT_CONNECT,
@@ -113,7 +140,6 @@ struct https_req {
 HTTPS_EXPORT https_req* https_get(const char* url);
 HTTPS_EXPORT https_req* https_post(const char* url, const char* data, uint32_t data_len);
 HTTPS_EXPORT void https_set_header(https_req* req, const char* header);
-HTTPS_EXPORT bool https_update(https_req* req);
 HTTPS_EXPORT void https_free(https_req* req);
 HTTPS_EXPORT char const* https_error_string(enum https_errors error);
 
@@ -124,6 +150,8 @@ HTTPS_EXPORT char const* https_error_string(enum https_errors error);
 
 // References:
 // https://github.com/kimtg/WinHttpExample/blob/master/WinHttpExample.cpp
+// https://learn.microsoft.com/en-us/archive/msdn-magazine/2008/august/windows-with-c-asynchronous-winhttp
+// https://gist.github.com/whoshuu/2dc858b8730079602044 // easy curl req example
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -288,7 +316,7 @@ static void https_finish_res(struct https_internal* st) {
 }
 
 static void https_req_error(struct https_internal* st, enum https_errors error) {
-    st->req.state = HTTPS_ERROR;
+    st->req.state = HTTPS_CONN_ERROR;
     if(!error) st->req.error = https_winhttp_to_https_errors(GetLastError());
     else       st->req.error = error;
     st->req.req_failed_reason = https_error_string(st->req.error);
@@ -298,9 +326,7 @@ static void https_req_error(struct https_internal* st, enum https_errors error) 
 }
 
 __stdcall static void https_winhttp_req_cb(HINTERNET hInternet, DWORD_PTR ctx, DWORD code, LPVOID info, DWORD length) {
-    static int count = 0;
     struct https_internal* st = (struct https_internal*)ctx;
-    // printf("%d ", count ++);
     switch(code) {
     case WINHTTP_CALLBACK_STATUS_SENDREQUEST_COMPLETE:
         WinHttpReceiveResponse(hInternet, NULL);
@@ -313,7 +339,6 @@ __stdcall static void https_winhttp_req_cb(HINTERNET hInternet, DWORD_PTR ctx, D
         break;
     case WINHTTP_CALLBACK_STATUS_DATA_AVAILABLE:;
         DWORD data_len = *((LPDWORD) info);
-        // printf("reading %lu (%lu) bytes, total %lu\n", data_len, length, st->req.data_len + data_len);
         if(!data_len) return https_finish_res(st);
         if(st->req.data_len + data_len > HTTPS_MIN_DATA_BUF_SIZE - 1 && !(st->req.data = realloc(st->req.data, st->req.data_len + data_len + 1)))
             https_req_error(st, HTTPS_ERR_OUT_OF_MEMORY);
@@ -321,7 +346,6 @@ __stdcall static void https_winhttp_req_cb(HINTERNET hInternet, DWORD_PTR ctx, D
         break;
     case WINHTTP_CALLBACK_STATUS_READ_COMPLETE:
         st->req.data_len += length;
-        // printf("read %lu bytes\n", length);
         WinHttpQueryDataAvailable(st->hRequest, NULL);
         break;
     case WINHTTP_CALLBACK_STATUS_REQUEST_ERROR: https_req_error(st, 0); break;
@@ -332,30 +356,20 @@ __stdcall static void https_winhttp_req_cb(HINTERNET hInternet, DWORD_PTR ctx, D
 // https://github.com/pierrecoll/winhttpasyncdemo/blob/master/AsyncDemo.cpp
 static bool https_request(struct https_internal* st, LPWSTR type) {
     static HINTERNET hSession = NULL;
-    // double open = get_precise_time();
     if(!hSession) {
         hSession = WinHttpOpen(HTTPS_CONCAT(L, HTTPS_APPLICATION_NAME), WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS,
                                WINHTTP_FLAG_ASYNC);
         if(!hSession) return false;
-        // Note: Something really weird where setting the error callback makes SendRequest synchronous
         if(WinHttpSetStatusCallback(hSession, (WINHTTP_STATUS_CALLBACK) https_winhttp_req_cb, WINHTTP_CALLBACK_FLAG_ALL_COMPLETIONS, 0) == WINHTTP_INVALID_STATUS_CALLBACK)
             return false;
     }
 
-    // double connect = get_precise_time();
-    // printf("WinhttpOpen took %lfs\n", connect - open);
-
     st->hConnect = WinHttpConnect(hSession, st->hostname, st->default_port ? INTERNET_DEFAULT_PORT : atoi(st->port), 0);
     if(!st->hConnect) return false;
-
-    // double request = get_precise_time();
-    // printf("WinhttpConnect took %lfs\n", request - connect);
-
 
     st->hRequest = WinHttpOpenRequest(st->hConnect, type, st->path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
                                      (st->tls ? WINHTTP_FLAG_SECURE : 0));
     if(!st->hRequest) { WinHttpCloseHandle(st->hConnect); return false; }
-    // printf("WinhttpOpenRequest took %lfs\n", get_precise_time() - request);
 
     // DWORD dwFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE | SECURITY_FLAG_IGNORE_CERT_CN_INVALID | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID;
     // WinHttpSetOption(st->hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &dwFlags, sizeof(dwFlags));
@@ -368,15 +382,11 @@ HTTPS_EXPORT https_req* https_get(const char* url) {
     puts(url);
     double start = get_precise_time();
     if(!https_request(st, L"GET")) goto fail;
-    double sendreq = get_precise_time();
-    printf("https_request took %lfs total\n", sendreq - start);
     if(!WinHttpSendRequest(st->hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, (DWORD_PTR) st)) {
         WinHttpCloseHandle(st->hRequest);
         WinHttpCloseHandle(st->hConnect);
         goto fail;
     }
-    printf("WinhttpSendRequest took %lfs\n", get_precise_time() - sendreq);
-    // printf("Sent request, %p, %p, %ld\n", st->hRequest, st->hConnect, GetLastError());
     st->req.state = HTTPS_PENDING;
     return &st->req;
 fail:
@@ -393,6 +403,7 @@ HTTPS_EXPORT https_req* https_post(const char* url, const char* data, uint32_t d
         WinHttpCloseHandle(st->hConnect);
         goto fail;
     }
+    st->req.state = HTTPS_PENDING;
     return &st->req;
 fail:
     free(st);
@@ -403,51 +414,6 @@ fail:
 //     struct https_internal* st = (struct https_internal*)req;
 //     WinHttpAddRequestHeaders(st->hRequest, header, -1, WINHTTP_ADDREQ_FLAG_ADD);
 // }
-
-HTTPS_EXPORT bool https_update(https_req *req) {
-    enum https_errors error = 0;
-    struct https_internal* st = (struct https_internal*)req;
-    if(st->req.state != HTTPS_PENDING) return false;
-    DWORD dwSize = 4;
-    if(!st->req.status_code) {
-        if(!WinHttpReceiveResponse(st->hRequest, NULL)) goto fail;
-        if(!WinHttpQueryHeaders(st->hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &st->req.status_code,
-                                &dwSize, WINHTTP_NO_HEADER_INDEX)) goto fail;
-    }
-
-    dwSize = 0;
-    if(!WinHttpQueryDataAvailable(st->hRequest, &dwSize)) goto fail;
-    if(!dwSize) {
-        st->req.state = HTTPS_COMPLETE;
-        ((char*) st->req.data)[st->req.data_len] = '\0';
-        WinHttpCloseHandle(st->hRequest);
-        WinHttpCloseHandle(st->hConnect);
-        return false;
-    }
-    
-    if(st->req.data_len + dwSize > HTTPS_MIN_DATA_BUF_SIZE - 1)
-        if(!(st->req.data = realloc(st->req.data, st->req.data_len + dwSize + 1))) {
-            error = HTTPS_ERR_OUT_OF_MEMORY; goto fail; }
-
-    // printf("update not done yet pog %u,  %ld\n", st->req.data_len, dwSize);
-    DWORD dwDownloaded = 0;
-    if(!WinHttpReadData(st->hRequest, (LPVOID)(st->req.data + st->req.data_len), dwSize, &dwDownloaded)) goto fail;
-    st->req.data_len += dwDownloaded;
-    // printf("update done pog %u, downloaded: %ld\n", st->req.data_len, dwDownloaded);
-
-    return true;
-fail:
-    WinHttpCloseHandle(st->hRequest);
-    WinHttpCloseHandle(st->hConnect);
-    // printf("update %d\n", GetLastError() == ERROR_WINHTTP_INCORRECT_HANDLE_STATE);
-    st->req.state = HTTPS_ERROR;
-    if(!error)
-        st->req.error = https_winhttp_to_https_errors(GetLastError());
-    else st->req.error = error;
-    st->req.req_failed_reason = https_error_string(st->req.error);
-    st->req.data_len = 0;
-    return false;
-}
 
 HTTPS_EXPORT void https_free(https_req* req) {
     struct https_internal* st = (struct https_internal*)req;
