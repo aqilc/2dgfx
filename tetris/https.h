@@ -1,15 +1,18 @@
 /////////////////////////////////////////////////////////////////////////////////////////////
 // https.h v1.0 by @aqilc                                                                  //
 // Licence: MIT                                                                            //
+// Part of the Cozyweb project.                                                            //
 //                                                                                         //
-// Initiates HTTPS requests in a really easy way, aims to be cross platform but only       //
-// Windows is currently implemented.                                                       //
+// Initiates **asynchronous** HTTPS requests in a really easy way, aims to be cross        //
+// platform but only Windows is currently implemented. Implemented on Windows without      //
+// using threads.                                                                          //
 //                                                                                         //
 // Inspired by http.h at https://github.com/mattiasgustavsson/libs/blob/main/docs/http.md  //
 //                                                                                         //
 // Define HTTPS_IMPLEMENTATION to include implementation in file.                          //
 // Define HTTPS_PRIVATE to make implementation private(static).                            //
 // Define HTTPS_APPLICATION_NAME in impl file as string according to the name of your app. //
+// Define HTTPS_SKIP_CERT_VALIDATION to disable critical security features.                //
 /////////////////////////////////////////////////////////////////////////////////////////////
 
 /**
@@ -18,7 +21,7 @@ Example:
 --------
 
     #include <stdio.h>
-    #define 
+    #define HTTPS_IMPLEMENTATION
     #include "include/https.h"
 
     int main() {
@@ -56,7 +59,6 @@ typedef struct https_req https_req;
 enum https_state {
     HTTPS_PENDING,
     HTTPS_COMPLETE,
-    HTTPS_FAILED,
     HTTPS_CONN_ERROR,
 };
 enum https_errors {
@@ -128,7 +130,8 @@ struct https_req {
     const char* content_type;
     const char* headers;
     const char* req_failed_reason;
-    
+
+    // Guaranteed to be NULL terminated, for easy printing of strings.
     void* data;
     uint32_t data_len;
     uint32_t status_code;
@@ -145,7 +148,7 @@ HTTPS_EXPORT char const* https_error_string(enum https_errors error);
 
 #endif
 
-#define HTTPS_IMPLEMENTATION
+// #define HTTPS_IMPLEMENTATION
 #ifdef HTTPS_IMPLEMENTATION
 
 // References:
@@ -167,7 +170,10 @@ HTTPS_EXPORT char const* https_error_string(enum https_errors error);
 #define HTTPS_APPLICATION_NAME "httpsh/1.1"
 #endif
 
+#ifndef HTTPS_MIN_DATA_BUF_SIZE
 #define HTTPS_MIN_DATA_BUF_SIZE 1024
+#endif
+
 #define HTTPS_CONCAT2(a, b) a##b
 #define HTTPS_CONCAT(a, b) HTTPS_CONCAT2(a, b)
 
@@ -245,12 +251,12 @@ HTTPS_EXPORT char const* https_error_string(enum https_errors error) {
 
 
 
-static inline double get_precise_time() {
-	LARGE_INTEGER t, f;
-	QueryPerformanceCounter(&t);
-	QueryPerformanceFrequency(&f);
-	return (double)t.QuadPart/(double)f.QuadPart;
-}
+// static inline double get_precise_time() {
+// 	LARGE_INTEGER t, f;
+// 	QueryPerformanceCounter(&t);
+// 	QueryPerformanceFrequency(&f);
+// 	return (double)t.QuadPart/(double)f.QuadPart;
+// }
 
 static bool https_parse_url(struct https_internal* st) {
     const uint32_t len = strlen(st->url);
@@ -333,8 +339,8 @@ __stdcall static void https_winhttp_req_cb(HINTERNET hInternet, DWORD_PTR ctx, D
         break;
     case WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE:;
         DWORD size;
-        WinHttpQueryHeaders(st->hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &st->req.status_code,
-                            &size, WINHTTP_NO_HEADER_INDEX);
+        WinHttpQueryHeaders(st->hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX,
+                            &st->req.status_code, &size, WINHTTP_NO_HEADER_INDEX);
         WinHttpQueryDataAvailable(st->hRequest, NULL);
         break;
     case WINHTTP_CALLBACK_STATUS_DATA_AVAILABLE:;
@@ -357,10 +363,11 @@ __stdcall static void https_winhttp_req_cb(HINTERNET hInternet, DWORD_PTR ctx, D
 static bool https_request(struct https_internal* st, LPWSTR type) {
     static HINTERNET hSession = NULL;
     if(!hSession) {
-        hSession = WinHttpOpen(HTTPS_CONCAT(L, HTTPS_APPLICATION_NAME), WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS,
-                               WINHTTP_FLAG_ASYNC);
+        hSession = WinHttpOpen(HTTPS_CONCAT(L, HTTPS_APPLICATION_NAME), WINHTTP_ACCESS_TYPE_NO_PROXY,
+                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, WINHTTP_FLAG_ASYNC);
         if(!hSession) return false;
-        if(WinHttpSetStatusCallback(hSession, (WINHTTP_STATUS_CALLBACK) https_winhttp_req_cb, WINHTTP_CALLBACK_FLAG_ALL_COMPLETIONS, 0) == WINHTTP_INVALID_STATUS_CALLBACK)
+        if(WinHttpSetStatusCallback(hSession, (WINHTTP_STATUS_CALLBACK) https_winhttp_req_cb,
+                                    WINHTTP_CALLBACK_FLAG_ALL_COMPLETIONS, 0) == WINHTTP_INVALID_STATUS_CALLBACK)
             return false;
     }
 
@@ -371,43 +378,49 @@ static bool https_request(struct https_internal* st, LPWSTR type) {
                                      (st->tls ? WINHTTP_FLAG_SECURE : 0));
     if(!st->hRequest) { WinHttpCloseHandle(st->hConnect); return false; }
 
-    // DWORD dwFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE | SECURITY_FLAG_IGNORE_CERT_CN_INVALID | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID;
-    // WinHttpSetOption(st->hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &dwFlags, sizeof(dwFlags));
+#ifdef HTTPS_SKIP_CERT_VALIDATION
+    DWORD dwFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE |
+                    SECURITY_FLAG_IGNORE_CERT_CN_INVALID | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID;
+    WinHttpSetOption(st->hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &dwFlags, sizeof(dwFlags));
+#endif
     return true;
 }
 
 HTTPS_EXPORT https_req* https_get(const char* url) {
     struct https_internal* st = https_new(url);
-    if(!https_parse_url(st)) goto fail;
+    if(!https_parse_url(st) && (st->req.error = HTTPS_ERR_INVALID_URL)) goto fail;
     puts(url);
-    double start = get_precise_time();
-    if(!https_request(st, L"GET")) goto fail;
+    if(!https_request(st, L"GET") && (st->req.error = https_winhttp_to_https_errors(GetLastError()))) goto fail;
     if(!WinHttpSendRequest(st->hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, (DWORD_PTR) st)) {
         WinHttpCloseHandle(st->hRequest);
         WinHttpCloseHandle(st->hConnect);
+        st->req.error = https_winhttp_to_https_errors(GetLastError());
         goto fail;
     }
     st->req.state = HTTPS_PENDING;
     return &st->req;
 fail:
-    free(st);
-    return NULL;
+    st->req.state = HTTPS_CONN_ERROR;
+    st->req.req_failed_reason = https_error_string(st->req.error);
+    return &st->req;
 }
 
 HTTPS_EXPORT https_req* https_post(const char* url, const char* data, uint32_t data_len) {
     struct https_internal* st = https_new(url);
-    if(!https_parse_url(st)) goto fail;
-    if(!https_request(st, L"POST")) goto fail;
+    if(!https_parse_url(st) && (st->req.error = HTTPS_ERR_INVALID_URL)) goto fail;
+    if(!https_request(st, L"POST") && (st->req.error = https_winhttp_to_https_errors(GetLastError()))) goto fail;
     if(!WinHttpSendRequest(st->hRequest, L"Content-Type: application/x-www-form-urlencoded", -1, (LPVOID)data, data_len, data_len, (DWORD_PTR) st)) {
         WinHttpCloseHandle(st->hRequest);
         WinHttpCloseHandle(st->hConnect);
+        st->req.error = https_winhttp_to_https_errors(GetLastError());
         goto fail;
     }
     st->req.state = HTTPS_PENDING;
     return &st->req;
 fail:
-    free(st);
-    return NULL;
+    st->req.state = HTTPS_CONN_ERROR;
+    st->req.req_failed_reason = https_error_string(st->req.error);
+    return &st->req;
 }
 
 // void https_set_header(https_req* req, const char* header) {
