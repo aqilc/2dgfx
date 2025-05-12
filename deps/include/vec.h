@@ -159,18 +159,14 @@ VEC_H_EXTERN char* vfmt(char* str, ...);
 #include <stdio.h>
 
 #ifndef VEC_H_OVERLOAD_ALLOCATORS
-	// Callocs a vec with a cap of 16 so subsequent pushes don't immediately trigger reallocation.
-	VEC_H_EXTERN void* vnew() {
-		struct vecdata_* v = VEC_H_CALLOC(1, sizeof(struct vecdata_) + 16 * sizeof(char));
-		v->cap = 16;
-		return v + 1;
-	}
-
 	VEC_H_EXTERN void* vnewn(uint32_t n) {
 		struct vecdata_* v = VEC_H_CALLOC(1, sizeof(struct vecdata_) + n * sizeof(char));
 		v->cap = n;
 		return v + 1;
 	}
+	
+	// Callocs a vec with a cap of 16 so subsequent pushes don't immediately trigger reallocation.
+	VEC_H_EXTERN void* vnew() { return vnewn(16); }
 #endif
 
 // Combines two vectors into a new vector
