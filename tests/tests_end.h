@@ -1,34 +1,26 @@
 // #include "tests.h"
-#include <setjmp.h>
-
-jmp_buf owo;
-unsigned int sigthing = 0;
-void* sigaddr = 0;
-
-// #undef _WIN32
-#if defined(_WIN32)
-// WINDOWS WHY ARE YOUR HEADERS SO BIG
-// #define WIN32_LEAN_AND_MEAN
-// #include <windows.h>
-LONG WINAPI plswork(PEXCEPTION_POINTERS pinfo) {
-	sigthing = pinfo->ExceptionRecord->ExceptionCode;
-	longjmp(owo, 1);
-}
-#else
-#include <signal.h>
-static void handler (int sig, siginfo_t* bruh, void* idc) {
-	sigthing = sig;
-	sigaddr = bruh->si_addr;
-	longjmp(owo, 1);
-}
-#endif
 
 int main() {
-
-
-	// So we can display unicode... windows rly took an L here ngl
 	#ifdef _WIN32
+		LARGE_INTEGER f;
+		QueryPerformanceFrequency(&f);
+		tests_clocks_per_sec = f.QuadPart;
+
+		// So we can display unicode... windows rly took an L here ngl
 		SetConsoleOutputCP(65001);
+
+		// https://stackoverflow.com/questions/6812224/getting-terminal-size-in-c-for-windows
+		CONSOLE_SCREEN_BUFFER_INFO csbi;
+		if(GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi))
+			testoutputwidth = csbi.srWindow.Right - csbi.srWindow.Left + 1 - 17 /* width of " PASS " + timing */;
+	#else
+		// tests_clocks_per_sec = CLOCKS_PER_SEC;
+		tests_clocks_per_sec = 1e9;
+
+		// https://stackoverflow.com/questions/23369503/how-to-get-the-terminal-size-in-c
+		struct winsize w;
+		ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
+		testoutputwidth = w.ws_col - 17 /* width of " PASS " + timing */;
 	#endif
 
 	#ifndef STOP_CATCHING_SIGNALS
@@ -62,7 +54,7 @@ int main() {
 	for (int i = 0, len = tests; i < len; i ++) {
 
 		// SigSegV Exception handling
-		if(!setjmp(owo)) {
+		if(!setjmp(tests_jmp_buf)) {
 			if (testfuncs[i]()) failed ++;
 		} else {
 			char* subtest = "subtest", * test = "test";
@@ -128,6 +120,7 @@ int main() {
 	if(!failed) printf(TERMGREENBOLD "ALL TESTS PASSED!!" TERMRESET" Nice job bro.");
 	else if(failed == tests) printf(TERMREDBOLD "All tests failed. Spectacular." TERMRESET);
 	else printf("%d / %d tests passed.", tests - failed, tests);
-	printf(" Took " TERMBLUEBOLD "%.2f ms" TERMRESET "\n", totaltime * 1000.0);
+	printf(" Took " TERMBLUEBOLD "%.2f ms" TERMRESET "\n", tests_totaltime * 1000.0);
 	return 0;
 }
+
