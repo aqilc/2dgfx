@@ -83,8 +83,6 @@ link_libraries(glfw freetype libglew_static stb_image)
 # link_libraries(freetype.lib glew32s.lib shell32.lib Gdi32.lib user32.lib opengl32.lib glfw3.lib)
 
 add_executable(graphics
-        deps/hash.c
-        deps/hashfunc.c
         deps/extern/tracy/TracyClient.cpp
         lib/2dgfx.c
         main.c)
