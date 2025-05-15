@@ -60,3 +60,4 @@ bin
 *.tmp*
 *.tracy
 *.rdc
+*.rdi
