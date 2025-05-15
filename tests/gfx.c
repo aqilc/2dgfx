@@ -1,22 +1,22 @@
 #include "tests.h"
 #include <2dgfx.h>
 
-typeface fon;
-img hi;
+gfx_face fon;
+gfx_img hi;
 TEST("startup") {
-	gfx_init("test window", 800, 600);
+	gfx_init("test window", NULL);
 }
 
 TEST("load font") {
-	fon = gfx_loadfont("roboto.ttf");
+	fon = gfx_load_font("roboto.ttf");
 }
 
 TEST("load image") {
-	hi = gfx_loadimg("hyperAngery.png");
+	hi = gfx_load_img("hyperAngery.png");
 }
 
 TEST("disregard") {
-	gfx_nextframe();
+	gfx_frame();
 }
 
 TEST("rectangle") {
@@ -32,7 +32,7 @@ TEST("Image display AGAIN") {
 }
 
 TEST("first text call") {
-	fontsize(20);
+	font_size(20);
 	text("ABCDEFGHIJKLMNOP", 20, 350);
 }
 
@@ -40,8 +40,5 @@ TEST("second text call") {
 	text("ABCDEFGHIJKLMNOP", 20, 370);
 }
 
-TEST("frame end") {
-	gfx_frameend();
-}
 
 #include "tests_end.h"
