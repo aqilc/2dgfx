@@ -1,4 +1,3 @@
-#include "lib/2dgfx.h"
 #include <stdlib.h>
 #include <math.h>
 
@@ -6,7 +5,6 @@
 #define GFX_MAIN_DEFINE
 #include <2dgfx.h>
 #include <vec.h>
-
 
 char* messages[] = {
   "lol",
@@ -53,28 +51,28 @@ gfx_img hi;
 gfx_face fon;
 char* fps = NULL;
 void setup() {
-  gfx_init("2dgfx", 800, 600);
-  hi = gfx_loadimg("hyperAngery.png");
-  fon = gfx_load_font("roboto.ttf");
+  gfx_init("2dgfx", NULL);
+  // hi = gfx_load_img("hyperAngery.png");
+  // fon = gfx_load_font("roboto.ttf");
 
-  for(int i = 0; i < PLEN; i ++)
-    particle_reset(i, 600);
+  // for(int i = 0; i < PLEN; i ++)
+  //   particle_reset(i, 600);
 }
 void loop() {
   gfx_vector m = gfx_mouse();
-  gfx_vector dims = gfx_screen_dims();
+  // gfx_vector dims = gfx_screen_dims();
 
 
   // particles_draw(dims.w, dims.h);
   fill(255, 255, 255, 255);
   rect(m.x, m.y, 20, 20);
-  image(hi, 350, 200, 100, 100);
-  font_size(20);
-  text("hello! THIS IS FINALLY WORKING PROPERLY WOOOOOO eahubrancodikr", 10, 400);
-  text("AAAAAAAAAAAA YES YOU DON'T DISTORT ANYMOER", 10, 430);
-  font_size(200);
-  text("BIG", 50, 300);
-  // circle(400, 300, 200);
+  // image(hi, 350, 200, 100, 100);
+  // font_size(20);
+  // text("hello! THIS IS FINALLY WORKING PROPERLY WOOOOOO eahubrancodikr", 10, 400);
+  // text("AAAAAAAAAAAA YES YOU DON'T DISTORT ANYMOER", 10, 430);
+  // font_size(200);
+  // text("BIG", 50, 300);
+  // // circle(400, 300, 200);
 
-  gfx_default_fps_counter();
+  // gfx_default_fps_counter();
 }

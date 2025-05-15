@@ -3,6 +3,14 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+// To draw a shape:
+// Need to set:
+// - x to x position
+// - y to y position
+// - type to either GFX_FULL, GFX_INNER, GFX_OUTER, GFX_TEX
+// - set either .col or .tex_id, uv_x and uv_y.
+
+
 typedef union gfx_vector_big {
   struct { int64_t x, y; };
   struct { double dx, dy; };
@@ -28,6 +36,43 @@ typedef union gfx_vector_micro {
   int16_t full;
 } gfx_vector_micro;
 
+enum gfx_setting_name {
+  GFX_SETTING_WIDTH,
+  GFX_SETTING_HEIGHT,
+  GFX_SETTING_APP_NAME,
+  GFX_SETTING_VSYNC,
+  GFX_SETTING_TRANSPARENT,
+  GFX_SETTING_NO_RESIZE,
+  GFX_SETTING_NO_DECORATIONS,
+  GFX_SETTING_DONT_STORE_SETTINGS,
+  GFX_SETTING_MSAA,
+  GFX_SETTING_INITIAL_WINDOW
+};
+typedef struct gfx_settings {
+  uint32_t width, height;
+  const char* app_name;
+  bool vsync;
+  bool transparent;
+  bool no_resize;
+  bool no_decorations;
+  bool dont_store_settings;
+  float fps_recalc_delta;
+  uint8_t msaa;
+  enum gfx_setting_initial_window_mode: uint8_t {
+    GFX_WIN_DEFAULT,
+    GFX_WIN_FULLSCREEN,
+    GFX_WIN_MAXIMIZED,
+    GFX_WIN_MINIMIZED
+  } initial_window;
+} gfx_settings;
+
+typedef enum gfx_store_type {
+  GFX_TYPE_INT, GFX_TYPE_DOUBLE, GFX_TYPE_STRING, GFX_TYPE_INT64, GFX_TYPE_BINARY
+} gfx_store_type;
+
+enum gfx_ids {
+  img_null = -1,
+};
 
 typedef enum gfx_keycode {
   GFX_KEY_SPACE         = 32,
@@ -119,19 +164,20 @@ typedef int gfx_img;
 typedef int gfx_face;
 
 // Initializes a 2DGFX Context and sets up OpenGL, heaps and buffers.
-struct gfx_ctx* gfx_init(const char* title, uint32_t w, uint32_t h);
-bool gfx_next_frame();
-void gfx_frameend();
+struct gfx_ctx* gfx_init(const char* title, gfx_settings* settings);
+bool gfx_frame();
 void gfx_quit();
 
 // When using multiple 2DGFX contexts, switch contexts with this.
-void gfx_curctx(struct gfx_ctx* c);
+void gfx_ctx_set(struct gfx_ctx* c);
 
 // Loads a font through FreeType
 gfx_face gfx_load_font(const char* file);
 
 // Loads in image through STB_Image
-gfx_img gfx_loadimg(char* file);
+gfx_img gfx_load_img(const char* file);
+gfx_img gfx_load_img_mem(uint8_t* t, uint32_t len);
+gfx_img gfx_load_img_rgba(uint8_t* t, int width, int height);
 
 // Input functions
 gfx_vector gfx_mouse();
@@ -139,25 +185,28 @@ gfx_vector gfx_screen_dims();
 
 // Drawing commands
 void fill(uint8_t r, uint8_t g, uint8_t b, uint8_t a); // Specify color for the next set of shapes.
-void quad(int x1, int y1, int x2, int y2, int x3, int y3, int x4, int y4); // Quad
-void rect(int x, int y, int w, int h); // Plain Rectangle
-void circle(int x, int y, int r); // Circle!!
+void quad(short x1, short y1, short x2, short y2, short x3, short y3, short x4, short y4);
+void rect(short x, short y, short w, short h);
+// void ellipse(short x, short y, short rx, short ry);
+// void ellipse_s(short x, short y, short rx, short ry, short stroke);
+// void circle(short x, short y, short r); // Circle!!
 
 // Image drawing commands
-void image(gfx_img img, int x, int y, int w, int h); // Draws an image at those coordinates.
-gfx_vector_mini* isize(gfx_img img); // Image size.
+void image(gfx_img img, short x, short y, short w, short h); // Draws an image at those coordinates.
+gfx_vector_mini* const isize(gfx_img img); // Image size.
 
 // Text Drawing commands
 void font_size(uint32_t size);
 void lineheight(float h);
 void font(gfx_face face, uint32_t size);
-void text(const char* str, int x, int y);
+void text(const char* str, short x, short y);
+void textf(short x, short y, const char* fmt, ...); // SLOW, AVOID UNLESS DEBUGGING
 
 // Calculates FPS
 double gfx_time();
 void gfx_sleep(uint32_t miliseconds);
 double gfx_fps();
-bool gfx_fpschanged();
+bool gfx_fps_changed();
 void gfx_default_fps_counter();
 
 void on_mouse_button(gfx_vector pos, gfx_mouse_button button, bool pressed, gfx_keymod mods);
@@ -169,7 +218,7 @@ void on_key_char(uint32_t utf_codepoint);
 void on_window_resize(gfx_vector size);
 void on_window_move(gfx_vector pos);
 
-char const * const gfx_key_name(gfx_keycode key);
+char const* const gfx_key_name(gfx_keycode key);
 
 #ifdef GFX_MAIN_DEFINE
 
@@ -177,19 +226,19 @@ char const * const gfx_key_name(gfx_keycode key);
 # if defined(_MSC_VER) && !defined(__clang__)
     void setup(void);
     void loop(void);
+    void cleanup(void);
     
-#   pragma comment(linker, " /alternatename:setup=setup__ /alternatename:loop=setup__")
+#   pragma comment(linker, " /alternatename:setup=setup__ /alternatename:loop=setup__ /alternatename:cleanup=setup__")
 # else
     void setup(void) __attribute__((weak));
     void loop(void) __attribute__((weak));
+    void cleanup(void) __attribute__((weak));
 # endif
 
   int main() {
     if(setup) setup();
-    while(gfx_next_frame()) {
-      if(loop) loop();
-      gfx_frameend();
-    }
+    if(loop) while(gfx_frame()) loop();
+    if(cleanup) cleanup();
     return 0;
   }
 #endif
