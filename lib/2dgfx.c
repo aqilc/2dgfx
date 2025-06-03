@@ -162,6 +162,9 @@ Current Tasks:
 
 #define FLOAT_PRECION_BASED_MAX 16777215.0f
 
+#define UV_X_MAX 16383
+#define UV_Y_MAX 8191
+
 // Batch rendering macros
 #define GFX_ATLAS_START_SIZE 512
 #define GFX_ATLAS_MAX_GROWTH_FACTOR 4
@@ -273,7 +276,7 @@ typedef double f64;
 	#define PROFILER_GPU_ZONE_START(zone_name) \
 		glQueryCounter(tracy_query_ids[tracy_current_query], GL_TIMESTAMP);\
 		___tracy_emit_gpu_zone_begin_alloc_callstack((const struct ___tracy_gpu_zone_begin_callstack_data) {\
-			.srcloc = ___tracy_alloc_srcloc_name(__LINE__, __FILE__, sizeof(__FILE__)-1, __func__, sizeof(__func__) - 1, zone_name, sizeof(zone_name) - 1),\
+			.srcloc = ___tracy_alloc_srcloc_name(__LINE__, __FILE__, sizeof(__FILE__)-1, __func__, sizeof(__func__) - 1, zone_name, sizeof(zone_name) - 1, 0),\
 			.depth = PROFILER_CALLSTACK_DEPTH,\
 			.queryId = tracy_current_query,\
 			.context = 1\
@@ -314,7 +317,7 @@ typedef double f64;
 
 	static inline void* tracy_malloc(size_t s) {
 		void* ret = malloc(s);
-		TracyCAlloc(ret, s)
+		TracyCAlloc(ret, s);
 		return ret;
 	}
 	static inline void* tracy_calloc(size_t n, size_t s) {
@@ -326,8 +329,8 @@ typedef double f64;
 		void* prev = ptr;
 		void* ret = realloc(ptr, s);
 		if(prev != ret) {
-			TracyCFree(prev)
-			TracyCAlloc(ret, s)
+			TracyCFree(prev);
+			TracyCAlloc(ret, s);
 		}
 		return ret;
 	}
@@ -423,6 +426,9 @@ union gfx_char_ident {
 // - type to either GFX_FULL, GFX_INNER, GFX_OUTER, GFX_TEX
 // - set either .col or .tex_id, uv_x and uv_y.
 
+// currently not really going to put effort into supporting gcc:
+// https://www.reddit.com/r/C_Programming/comments/x5rxu3/interesting_gcc_and_clang_incompatibility/
+
 struct gfx_drawbuf {
 	#pragma pack(push, 1)
 	struct gfx_vtx_buf {
@@ -435,9 +441,9 @@ struct gfx_drawbuf {
 		};
 		union {
 		  struct {
-				unsigned int tex_id: 5;
-				unsigned int uv_x  : 14;
 				unsigned int uv_y  : 13;
+				unsigned int uv_x  : 14;
+				unsigned int tex_slot: 5;
 			};
   		union gfx_color {
   			GLuint full;
@@ -515,7 +521,7 @@ struct gfx_ctx {
 		GLuint curtex;
 		gfx_drawbuf drawbuf;
 		ht(gfx_uni, char*, GLint) uniforms;
-		gfx_tex_id slots[32];
+		gfx_tex_hnd slots[32];
 		gfx_slot_hnd slot_bound;
 	} gl;
 
@@ -585,6 +591,8 @@ static struct {
 
 		out vec2 v_uv;
 		out vec4 v_col;
+		flat out uvec4 v_info;
+		flat out uvec2 debug_uv;
 		flat out uint v_type;
 		flat out uint v_tex_id;
 		// out vec2 v_pos;
@@ -601,12 +609,17 @@ static struct {
 			int y = (-pos.y) >> 2;
 
 			if (type == uint(3)) {
-			  uint tex_id = info.x & uint(0xF8);
-				uint uv_x = ((info.x & uint(0x7)) << 11) + (info.y << 3) + ((info.z & uint(0xE0)) >> 5);
-				uint uv_y = ((info.z & uint(0x1F)) << 8) + info.w;
+			  uint tex_id = (info.w & uint(0xF8)) >> 3;
+				uint uv_x = (((info.w << 11) & uint(0x3800)) | (info.z << 3) | (info.y >> 5)) & uint(0x3FFF);
+				uint uv_y = (((info.y << 8) & uint(0x1F00)) | info.x) & uint(0x1FFF);
+			  // uint tex_id = (info.x & uint(0xF8000000)) >> 27;
+				// uint uv_x =   (info.x & uint(0x07FFE000)) >> 13;
+				// uint uv_y =    info.x & uint(0x00001FFF);
 
 				v_tex_id = tex_id;
-				v_uv = vec2(float(uv_x), float(uv_y));
+				v_info = info;
+				debug_uv = uvec2(uv_x, uv_y);
+				v_uv = vec2(float(uv_x) / 16383.0, float(uv_y) / 8191.0);
 			} else {
 			  v_uv = data[gl_VertexID % 3];
 			  v_col = col;
@@ -642,13 +655,12 @@ static struct {
 		// }
 
 		void main() {
-			// if (v_type == uint(3)) {
-			  
-			// }
+			if (v_type == uint(3)) {
+			  text = texture(u_tex[v_tex_id], v_uv);
+			  color = text;
+				return;
+			}
 			color = vec4(1.0, 1.0, 1.0, 1.0);
-			// if(color.a <= .1) {
-			// 	discard;
-			// }
 		}
 		// CGLSLEND
 	)
@@ -737,6 +749,7 @@ static inline GLuint gfx_shaderprog(const char* vert, const char* frag) {
 // Could use this algorithm with "unused spaces" from here but would require a reimpl: https://github.com/TeamHypersomnia/rectpack2D/
 // gfx_atlas_insert(vnew(), &(struct gfx_atlas_node) { {x, y}, {w, h}, {NULL, NULL}, false }, &(gfx_vector) {w, h})
 static inline struct gfx_atlas_node* gfx_atlas_insert(gfx_atlas* atlas, u32 parent, gfx_vector_mini* size) {
+  PROFILER_ZONE_START
 	gfx_atlas_node* prnt = atlas->tree + parent;
 
 	// Index 0 is taken up by the root node.
@@ -796,11 +809,13 @@ static inline struct gfx_atlas_node* gfx_atlas_insert(gfx_atlas* atlas, u32 pare
 		vpusharr(atlas->tree, { c1, c2 }); // THIS MODIFIES THE POINTER SO YOU CANNOT USE PRNT BECAUSE IT USES THE OLD PTR
 		atlas->tree[parent].child[0] = len;
 		atlas->tree[parent].child[1] = len + 1;
+		PROFILER_ZONE_END
 		return gfx_atlas_insert(atlas, len, size);
 	}
 
-	struct gfx_atlas_node* firstchildins = gfx_atlas_insert(atlas, prnt->child[0], size);
-	return firstchildins ? firstchildins : gfx_atlas_insert(atlas, prnt->child[1], size);
+	struct gfx_atlas_node* ret = gfx_atlas_insert(atlas, prnt->child[0], size) ?: gfx_atlas_insert(atlas, prnt->child[1], size);
+	PROFILER_ZONE_END
+	return ret;
 }
 
 
@@ -1071,7 +1086,7 @@ struct gfx_ctx* gfx_init(const char* title, gfx_settings* settings) {
 
 
 	// Set the framerate to the framerate of the screen, basically 60fps.
-	glfwSwapInterval(1);
+	// glfwSwapInterval(1);
 
 	GLenum err;
 	CHECK_CALL((err = glewInit()), glfwTerminate(); free(ctx); ctx = old_ctx; return NULL, "GLEW initialization failed: %s", glewGetErrorString(err));
@@ -1099,8 +1114,8 @@ struct gfx_ctx* gfx_init(const char* title, gfx_settings* settings) {
 	ctx->font.size = 48;
 	ctx->window = window;
 
-	for(int i = 0; i < sizeof(ctx->gl.slots) / sizeof(ctx->gl.slots[0]); i ++)
-		ctx->gl.slots[i] = -1;
+	// for(int i = 0; i < sizeof(ctx->gl.slots) / sizeof(ctx->gl.slots[0]); i ++)
+	// 	ctx->gl.slots[i] = -1;
 
 	// Initializes OpenGL Context
 	gfx_ctx_set(ctx);
@@ -1135,9 +1150,8 @@ bool gfx_frame() {
 		PROFILER_GPU_ZONE_START("swapbuffers")
 		glfwSwapBuffers(ctx->window);
 		PROFILER_GPU_ZONE_END()
-		if(ctx->frame.count % 50 == 0) {
-			PROFILER_GPU_QUERIES_COLLECT() // NEEDS the outside brackets since this is multiple lines.
-		}
+		if(ctx->frame.count % 50 == 0)
+			PROFILER_GPU_QUERIES_COLLECT()
 		glfwPollEvents();
 	}
 	PROFILER_FRAME_MARK
@@ -1209,13 +1223,19 @@ static inline void gfx_draw_setup() {
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ctx->gl.idxbufid);
 
 	// REMEMBER TO CHANGE THE NUMBER AT THE FRONT ITS INSANELY IMPORTANT
+	// struct gfx_layoutelement {
+	// 	GLenum type;
+	// 	u32 count;
+	// 	bool normalized;
+	// 	bool integer;
+	// };
 	gfx_applylayout(2, (struct gfx_layoutelement[]) {
 		{ GL_SHORT,          2, false, true }, // X, Y
 		// { GL_UNSIGNED_SHORT, 1, true,  false }, // Multipurpose (Stroke) (future maybe)
 		// { GL_UNSIGNED_BYTE,  1, false, true  }, // Type of texture.
 		// { GL_UNSIGNED_BYTE,  1, false, true  }, // Texture Index in the array of texture samplers
 		// { GL_UNSIGNED_SHORT, 2, true,  false }, // Texture X, Texture Y
-		{ GL_UNSIGNED_BYTE,  4, true,  false }  // Color (RGBA)
+		{ GL_UNSIGNED_BYTE,  4, false, true }  // Color (RGBA)
 	});
 	gfx_usetiv("u_tex", (int[]) { 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31 }, 32);
 }
@@ -1223,11 +1243,11 @@ static inline void gfx_draw_setup() {
 static void gfx_update_atlas(gfx_atlas* atlas);
 static inline void gfx_make_tex_active(gfx_tex_id tex_id);
 static inline void draw() {
-	PROFILER_ZONE_START
-	PROFILER_GPU_ZONE_START("draw")
 	u32 slen = vlen(ctx->gl.drawbuf.shp);
 	u32 ilen = vlen(ctx->gl.drawbuf.idx);
 	if(!slen) return;
+	PROFILER_ZONE_START
+	PROFILER_GPU_ZONE_START("draw")
 
 	// Upload all texture atlas updates
 	for(u32 i = 0; i < vlen(ctx->atlases); i ++) {
@@ -1437,21 +1457,28 @@ void background(u8 r, u8 g, u8 b, u8 a) {
 
 // ------------------------------ Texture + Atlas Creation Functions ------------------------------ //
 
-static inline void gfx_bind_slot(gfx_slot_hnd slot) { if(slot) glActiveTexture(GL_TEXTURE0 + (ctx->gl.slot_bound = slot)); }
+/*
+ * System Architecture:
+ * - Slot : One of the 32 texture slots available for drawing texels from that Opengl provides.
+ * - Texture ID : The ID of the texture in OpenGL (1024 available, pretty much unreachable).
+ * - 
+ */
+
+static inline void gfx_bind_slot(gfx_slot_hnd slot) { if(slot) glActiveTexture(GL_TEXTURE0 + (ctx->gl.slot_bound = slot) - 1); }
 static inline void gfx_bind_tex(gfx_tex_id tex) {
 	if(ctx->textures[tex].slot == ctx->gl.slot_bound) return;
 
-	if(ctx->gl.slots[ctx->gl.slot_bound])
-		ctx->textures[ctx->gl.slots[ctx->gl.slot_bound]].slot = 0;
+	if(ctx->gl.slots[ctx->gl.slot_bound - 1])
+		ctx->textures[ctx->gl.slots[ctx->gl.slot_bound - 1] - 1].slot = 0;
 
-	ctx->gl.slots[ctx->gl.slot_bound] = tex;
+	ctx->gl.slots[ctx->gl.slot_bound - 1] = tex + 1;
 	ctx->textures[tex].slot = ctx->gl.slot_bound;
 	glBindTexture(GL_TEXTURE_2D, ctx->textures[tex].id);
 	info("Bound texture #%d to slot #%d", tex, ctx->textures[tex].slot);
 }
-static inline u8 gfx_find_empty_slot() {
+static inline gfx_slot_hnd gfx_find_empty_slot() {
 	for(int i = 0; i < sizeof(ctx->gl.slots) / sizeof(ctx->gl.slots[0]); i ++)
-		if(!ctx->gl.slots[i]) return i;
+		if(!ctx->gl.slots[i]) return i + 1;
 	return 0;
 }
 static inline void gfx_make_tex_active(gfx_tex_id tex_id) {
@@ -1469,11 +1496,11 @@ static void gfx_tex_upload(u8* buf, u32 w, u32 h, GLenum format, bool pixellated
 	info("Uploaded texture (%dx%d) to slot #%d", w, h, ctx->gl.slot_bound);
 }
 
-static u32 gfx_tex_push(bool pixellated) {
+static gfx_tex_id gfx_tex_push(bool pixellated) {
 	gfx_bind_slot(gfx_find_empty_slot());
 
 	vpush(ctx->textures, {});
-	u32 tex_id = vlen(ctx->textures) - 1;
+	gfx_tex_id tex_id = vlen(ctx->textures) - 1;
 	glGenTextures(1, &ctx->textures[tex_id].id);
 	gfx_bind_tex(tex_id);
 
@@ -1486,6 +1513,17 @@ static u32 gfx_tex_push(bool pixellated) {
 	if(!pixellated) glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
 
 	return tex_id;
+}
+
+static gfx_slot_hnd gfx_make_tex_available_for_draw(gfx_tex_id tex_id) {
+  gfx_texture* tex = &ctx->textures[tex_id];
+  if(!tex->slot) {
+		tex->slot = gfx_find_empty_slot();
+		if(!tex->slot) { draw(); tex->slot = 1; /* find_empty_slot will always return 1 here. */ }
+		gfx_bind_slot(tex->slot);
+		gfx_bind_tex(tex_id);
+	}
+	return tex->slot;
 }
 
 static u32 gfx_atlas_try_insert(gfx_atlas* tex_atlas, gfx_vector_mini* size, struct gfx_atlas_node** ret_maybe) {
@@ -1504,7 +1542,7 @@ static gfx_atlas* gfx_atlases_add(GLenum format, bool pixellated, gfx_vector_min
 	PROFILER_ZONE_START
 	u32 growth = 0;
 	gfx_atlas* atlas = NULL;
-	struct gfx_atlas_node* maybe;
+	struct gfx_atlas_node* maybe = NULL;
 
 	for(int i = 0; i < vlen(ctx->atlases) && !growth; i ++)
 		if(ctx->atlases[i].format == format)
@@ -1525,7 +1563,7 @@ static gfx_atlas* gfx_atlases_add(GLenum format, bool pixellated, gfx_vector_min
 		gfx_assert(gfx_atlas_try_insert(atlas, size, &maybe), "Somehow couldn't find space to insert into the atlas, object probably too big (%dx%d).", size->x, size->y);
 
 		atlas->buf = GFX_MALLOC(GFX_ATLAS_START_SIZE * GFX_ATLAS_START_SIZE * gfx_glsizeof(format) * sizeof(u8) * atlas->growth_factor);
-		info("Generating new atlas (#%d)", vlen(ctx->atlases));
+		info("Generating new atlas #%d", vlen(ctx->atlases));
 
 	} else if(growth > 1) {
 		u8* new_buf = GFX_MALLOC(GFX_ATLAS_START_SIZE * GFX_ATLAS_START_SIZE * gfx_glsizeof(format) * sizeof(u8) * atlas->growth_factor);
@@ -1558,6 +1596,7 @@ static void gfx_update_atlas(gfx_atlas* atlas) {
 		gfx_tex_upload(atlas->buf, GFX_ATLAS_W(atlas), GFX_ATLAS_START_SIZE * atlas->growth_factor, atlas->format, false);
 		atlas->uploaded = true;
 		vempty(atlas->added);
+		PROFILER_ZONE_END
 		return;
 	}
 
@@ -1634,7 +1673,7 @@ gfx_img gfx_load_img_rgba(u8* t, int width, int height) {
 		gfx_tex_upload(t, width, height, GL_RGBA, false);
 	}
 
-	info("Loaded image (%dx%d) into %s (id: %d)", width, height, img.atlas_hnd ? "atlas" : "texture", img.atlas_hnd ? img.atlas_hnd : img.tex_hnd);
+	info("Loaded image (%dx%d) into %s #%d", width, height, img.atlas_hnd ? "atlas" : "texture", img.atlas_hnd ? img.atlas_hnd : img.tex_hnd);
 
 	gfx_assert(img.tex_hnd || img.atlas_hnd, "Critical error loading image (%dx%d) for some reason.", width, height);
 	stbi_image_free(t);
@@ -1669,37 +1708,32 @@ void image(gfx_img img_id, short x, short y, short w, short h) {
 
 	gfx_internal_image* img = ctx->images + img_id;
 	GLuint tex_id = img->tex_hnd ? img->tex_hnd - 1 : ctx->atlases[img->atlas_hnd - 1].tex_id;
-	gfx_texture* tex = ctx->textures + tex_id;
-	gfx_vector_mini tcoords[4] = {
-		{ .w = 0,         .h = 0,         },
-		{ .w = USHRT_MAX, .h = 0,         },
-		{ .w = USHRT_MAX, .h = USHRT_MAX, },
-		{ .w = 0,         .h = USHRT_MAX, },
-	};
+	// gfx_vector_mini tcoords[4] = {
+	// 	{ .w = 0,        .h = 0,        },
+	// 	{ .w = UV_X_MAX, .h = 0,        },
+	// 	{ .w = UV_X_MAX, .h = UV_Y_MAX, },
+	// 	{ .w = 0,        .h = UV_Y_MAX, },
+	// };
 
-	if(!tex->slot) {
-		tex->slot = gfx_find_empty_slot();
-		if(!tex->slot) { draw(); tex->slot = 1; /* find_empty_slot will always return 1 here. */ }
-		gfx_bind_slot(tex->slot);
-		gfx_bind_tex(tex_id);
-	}
+	gfx_slot_hnd slot = gfx_make_tex_available_for_draw(tex_id);
 
-	if(img->atlas_hnd) {
-		gfx_atlas* atlas = ctx->atlases + img->atlas_hnd - 1;
-		tcoords[0] = (gfx_vector_mini) { .w = img->place.x,               .h = img->place.y };
-		tcoords[1] = (gfx_vector_mini) { .w = img->place.x + img->size.w, .h = img->place.y };
-		tcoords[2] = (gfx_vector_mini) { .w = img->place.x + img->size.w, .h = img->place.y + img->size.h };
-		tcoords[3] = (gfx_vector_mini) { .w = img->place.x,               .h = img->place.y + img->size.h };
-	}
+	// This code is for when Images automatically get allocated to atlases. It should work right now but complicates things so it's disabled.
+	// if(img->atlas_hnd) {
+	// 	gfx_atlas* atlas = ctx->atlases + img->atlas_hnd - 1;
+	// 	tcoords[0] = (gfx_vector_mini) { .w = img->place.x,               .h = img->place.y };
+	// 	tcoords[1] = (gfx_vector_mini) { .w = img->place.x + img->size.w, .h = img->place.y };
+	// 	tcoords[2] = (gfx_vector_mini) { .w = img->place.x + img->size.w, .h = img->place.y + img->size.h };
+	// 	tcoords[3] = (gfx_vector_mini) { .w = img->place.x,               .h = img->place.y + img->size.h };
+	// }
 
 	// Creates a rectangle the image will be held on, then uploads the texture coordinates to map to the image
 	u32 cur_idx = vlen(ctx->gl.drawbuf.shp);
 	vpusharr(ctx->gl.drawbuf.idx, { cur_idx, cur_idx + 1, cur_idx + 2, cur_idx + 2, cur_idx, cur_idx + 3 });
 	vpusharr(ctx->gl.drawbuf.shp, {
-		{ .x = x    , .y = y    , .type = GFX_TEX, .col = { .full = ctx->curcol.full } },
-		{ .x = x + w, .y = y    , .type = GFX_TEX, .col = { .full = ctx->curcol.full } },
-		{ .x = x + w, .y = y + h, .type = GFX_TEX, .col = { .full = ctx->curcol.full } },
-		{ .x = x    , .y = y + h, .type = GFX_TEX, .col = { .full = ctx->curcol.full } },
+		{ .x = x    , .y = y    , .type = GFX_TEX, .tex_slot = slot - 1, .uv_x = 0,        .uv_y = 0,        },
+		{ .x = x + w, .y = y    , .type = GFX_TEX, .tex_slot = slot - 1, .uv_x = UV_X_MAX, .uv_y = 0,        },
+		{ .x = x + w, .y = y + h, .type = GFX_TEX, .tex_slot = slot - 1, .uv_x = UV_X_MAX, .uv_y = UV_Y_MAX, },
+		{ .x = x    , .y = y + h, .type = GFX_TEX, .tex_slot = slot - 1, .uv_x = 0,        .uv_y = UV_Y_MAX, },
 	});
 	PROFILER_ZONE_END
 }
@@ -1736,8 +1770,8 @@ static inline FT_ULong gfx_readutf8(u8** str) {
 static gfx_char* gfx_load_char(gfx_face tf, FT_ULong c) {
 	PROFILER_ZONE_START
 	gfx_typeface* face = ctx->font.store + tf;
-	CHECK_CALL(FT_Set_Pixel_Sizes(face->face, 0, ctx->font.size * 4.0f / 3.0f), return NULL, "Couldn't set size");
-	CHECK_CALL(FT_Load_Char(face->face, c, FT_LOAD_RENDER), return NULL, "Couldn't load char '%c' (%X)", c, c);
+	CHECK_CALL(FT_Set_Pixel_Sizes(face->face, 0, ctx->font.size * 4.0f / 3.0f), PROFILER_ZONE_END; return NULL, "Couldn't set size");
+	CHECK_CALL(FT_Load_Char(face->face, c, FT_LOAD_RENDER), PROFILER_ZONE_END; return NULL, "Couldn't load char '%c' (%X)", c, c);
 
 	int width = face->face->glyph->bitmap.width;
 	int height = face->face->glyph->bitmap.rows;
@@ -1803,9 +1837,8 @@ void font(gfx_face face, u32 size) {
 	if(size > 0) ctx->font.size = size;
 }
 void text(const char* str, short x, short y) {
-	PROFILER_ZONE_START
-	// PROFILER_CALL(TracyCZoneText(tracy_ctx, str, strlen(str)))
 	if(!vlen(ctx->font.store)) return;
+	PROFILER_ZONE_START
 
 	gfx_typeface* face = ctx->font.store + ctx->font.cur;
 
@@ -1832,15 +1865,7 @@ void text(const char* str, short x, short y) {
 		if(!ch) continue;
 
 		gfx_atlas* atlas = ctx->atlases + ch->atlas;
-		gfx_texture* tex = ctx->textures + atlas->tex_id;
-
-		if(!tex->slot) {
-			tex->slot = gfx_find_empty_slot();
-			if(!tex->slot) { draw(); tex->slot = 1; /* find_empty_slot will always return 1 here. */ }
-			gfx_bind_slot(tex->slot);
-			gfx_bind_tex(atlas->tex_id);
-		}
-
+		gfx_slot_hnd slot = gfx_make_tex_available_for_draw(atlas->tex_id);
 
 		realx = curx + ch->bearing.x;
 		realy = cury - ch->bearing.y;
@@ -1848,18 +1873,18 @@ void text(const char* str, short x, short y) {
 		h     = ch->size.y;
 
 
-		tx = (float) ch->place.x * (float) (USHRT_MAX / (float) (atlas->growth_factor * GFX_ATLAS_START_SIZE));
-		ty = (float) ch->place.y * (float) (USHRT_MAX / (float) (atlas->growth_factor * GFX_ATLAS_START_SIZE));
-		tw = (float) ch->size.x  * (float) (USHRT_MAX / (float) (atlas->growth_factor * GFX_ATLAS_START_SIZE));
-		th = (float) ch->size.y  * (float) (USHRT_MAX / (float) (atlas->growth_factor * GFX_ATLAS_START_SIZE));
+		tx = (float) ch->place.x * (float) (UV_X_MAX / (float) (atlas->growth_factor * GFX_ATLAS_START_SIZE));
+		ty = (float) ch->place.y * (float) (UV_Y_MAX / (float) (atlas->growth_factor * GFX_ATLAS_START_SIZE));
+		tw = (float) ch->size.x  * (float) (UV_X_MAX / (float) (atlas->growth_factor * GFX_ATLAS_START_SIZE));
+		th = (float) ch->size.y  * (float) (UV_Y_MAX / (float) (atlas->growth_factor * GFX_ATLAS_START_SIZE));
 
 		u32 cur_idx = vlen(ctx->gl.drawbuf.shp);
 		vpusharr(ctx->gl.drawbuf.idx, { cur_idx, cur_idx + 1, cur_idx + 2, cur_idx + 2, cur_idx, cur_idx + 3 });
 		vpusharr(ctx->gl.drawbuf.shp, {
-			{ .x = realx    , .y = realy    , .type = GFX_TEX, .col = { .full = ctx->curcol.full }},
-			{ .x = realx + w, .y = realy    , .type = GFX_TEX, .col = { .full = ctx->curcol.full }},
-			{ .x = realx + w, .y = realy + h, .type = GFX_TEX, .col = { .full = ctx->curcol.full }},
-			{ .x = realx    , .y = realy + h, .type = GFX_TEX, .col = { .full = ctx->curcol.full }}
+			{ .x = realx    , .y = realy    , .type = GFX_TEX, .tex_slot = slot - 1, .uv_x = tx,      .uv_y = ty },
+			{ .x = realx + w, .y = realy    , .type = GFX_TEX, .tex_slot = slot - 1, .uv_x = tx + tw, .uv_y = ty },
+			{ .x = realx + w, .y = realy + h, .type = GFX_TEX, .tex_slot = slot - 1, .uv_x = tx + tw, .uv_y = ty + th },
+			{ .x = realx    , .y = realy + h, .type = GFX_TEX, .tex_slot = slot - 1, .uv_x = tx,      .uv_y = ty + th }
 		});
 
 		// Advance cursors for next glyph

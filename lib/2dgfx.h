@@ -3,13 +3,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-// To draw a shape:
-// Need to set:
-// - x to x position
-// - y to y position
-// - type to either GFX_FULL, GFX_INNER, GFX_OUTER, GFX_TEX
-// - set either .col or .tex_id, uv_x and uv_y.
-
 
 typedef union gfx_vector_big {
   struct { int64_t x, y; };
