@@ -17,7 +17,7 @@ mkdir bin
 :: set c=clang-cl --target=i386-pc-win32 /c /MDd /Z7 /EHsc /Od /D_CRT_SECURE_NO_WARNINGS /I"./deps/include/" /I"./lib/" /Fo"./bin/" main.c
 :: set c=clang-cl --target=i386-pc-win32 /c /MD /Zi /EHsc /O2 /D_CRT_SECURE_NO_WARNINGS /I"./deps/include/" /I"./lib/" /Fo"./bin/" main.c
 :: set c=clang-cl --target=x86_64-pc-win32 /c /MD /Zi /EHsc /O2 /D_CRT_SECURE_NO_WARNINGS /I"./deps/include/" /I"./lib/" /Fo"./bin/" main.c
-set c=clang-cl --target=x86_64-pc-win32 /c /MDd /Z7 /EHsc /Od /D_CRT_SECURE_NO_WARNINGS /DDEBUG /I"./deps/include/" /I"./lib/" /Fo"./bin/" main.c
+set c=clang-cl --target=x86_64-pc-win32 /c /MDd /Z7 /EHsc /Od /D_CRT_SECURE_NO_WARNINGS /DGFX_DEBUG /I"./deps/include/" /I"./lib/" /Fo"./bin/" main.c
 :: for /f "tokens=*" %%F in ('dir /b /a:-d "*.c"') do call set c=%%c%% "%%F"
 :: for /f "tokens=*" %%F in ('dir /b /a:-d ".\deps\*.c"') do call set c=%%c%% ".\deps\%%F"
 for /f "tokens=*" %%F in ('dir /b /a:-d ".\lib\*.c"') do call set c=%%c%% ".\lib\%%F"
